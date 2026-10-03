@@ -12,7 +12,11 @@ enum Scripts {
         const st = document.createElement('style');
         st.id = 'vercel-sim-switcher-hide';
         // touch-action: manipulation turns off WebKit's double-tap-to-zoom (and its tap delay).
-        st.textContent = '[data-vercel-sim-switcher] { display: none !important; } html { touch-action: manipulation; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }';
+        // Feel like an app, not a web page: no text selection, no long-press callout or
+        // grey tap flash. Text fields keep selection so typing and editing still work.
+        st.textContent = '[data-vercel-sim-switcher] { display: none !important; } html { touch-action: manipulation; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }'
+          + ' *, *::before, *::after { -webkit-user-select: none !important; user-select: none !important; -webkit-touch-callout: none !important; -webkit-tap-highlight-color: transparent !important; }'
+          + ' input, textarea, select, [contenteditable]:not([contenteditable="false"]), [contenteditable]:not([contenteditable="false"]) * { -webkit-user-select: text !important; user-select: text !important; -webkit-touch-callout: default !important; }';
         (document.head || document.documentElement).appendChild(st);
       };
       if (document.documentElement) add(); else document.addEventListener('DOMContentLoaded', add);

@@ -24,11 +24,11 @@ Signing & Capabilities.
 |---|---|
 | Link widget | The **Open a prototype** card under the clock. Paste (press and hold in the field) or type a Vercel link and tap the arrow (or Go) to load it. The ✕ clears the field; an invalid link shakes the card and says so. |
 | Link Directory | The card under *Open a prototype*. Every link you submit (widget or options sheet) is saved automatically once its page loads. Typos, unreachable servers and HTTP error pages (404, 500…) are never saved: newest first, no duplicates, titled from the page once it loads (e.g. *noon — Home*). Tap a row to open it. Swipe left to delete: a short swipe shows Delete, a long one deletes at once. Swipe right to edit: a short swipe shows Edit, a long one opens the editor. There you can rename the link, and change its URL only if you edit it. Your name is never replaced by the page title, and clearing it brings the title back. Press and hold for Edit / Copy Link / Remove. File links (images, PDFs…) are skipped. Long lists scroll inside the card. |
-| Lock screen | Your wallpaper, plus the live date and time in the Figma typography (Motion (Sas) 1526:74437). **Swipe up** resumes the open prototype, or the most recent one. With nothing to open, it shows the panel. **Press and hold** opens the panel. |
-| Options sheet | **Double-tap anywhere** (over a prototype or on the lock screen) to open a bottom sheet with every option. A two-finger press-and-hold or a shake (Simulator: ⌃⌘Z) also opens it. Contents: the iteration selector (numbers, reset and any other controls such as *Spec Sheet*), the address field, Reload, Screenshot (share sheet), Home, recents, status bar, home indicator, 375 scaling, the on-screen iteration pill, Appearance, device details, and Clear cookies & cache. |
+| Lock screen | Your wallpaper, plus the live date and time in the Figma typography (Motion (Sas) 1526:74437). **Swipe up** resumes the open prototype, or the most recent one. With nothing to open, it shows the panel. |
+| Options sheet | **Double-tap with two fingers anywhere** (over a prototype or on the lock screen) to open a bottom sheet with every option. A single-finger double-tap always goes to the prototype. A two-finger press-and-hold or a shake (Simulator: ⌃⌘Z) also opens it. Contents: the iteration selector (numbers, reset and any other controls such as *Spec Sheet*), the address field, Reload, Screenshot (share sheet), Home, recents, status bar, home indicator, 375 scaling, the on-screen iteration pill, Appearance, device details, and Clear cookies & cache. |
 | Iteration selector | The prototype's own picker (1 · 2 · 3 · 4 · reset · Spec Sheet…) is detected and hidden in the page, then shown in the options sheet. Turn on *Iteration pill on screen* for a floating pill. |
 | Device fit (automatic) | The app detects the iPhone (model, screen, scale, safe areas) and locks the page's viewport to `width=375` at a fixed scale of screen width ÷ 375, with `user-scalable=no`. The design lays out at exactly 375 CSS px (including `100vw`), keeps its proportions, and fills the screen. The height follows the device's aspect ratio, and safe areas reach the page as `env(safe-area-inset-*)` in its own px. The page's own viewport tag is rewritten, keeping keys like `interactive-widget`. |
-| No zoom | Pinch zoom, double-tap zoom and zoom bounce are all off, so the prototype stays fixed to the screen. Double-tap opens the Options sheet instead. |
+| No zoom | Pinch zoom, double-tap zoom and zoom bounce are all off, so the prototype stays fixed to the screen. Pressing and holding never selects text or shows a callout or link preview, so it feels like an app, not a web page (text fields still select normally). |
 | Status bar / home indicator | Hidden over prototypes by default; the lock screen always shows them. |
 | Appearance | System / Light / Dark, sets `prefers-color-scheme` for the prototype. |
 | Haptics | The prototype's haptics play on the iPhone's Taptic Engine, detected automatically: (1) `window.webkit.messageHandlers.haptic.postMessage(kind)` (also `haptics`, `hapticFeedback`, `vibrate`), with a kind name or `{type, intensity}`; (2) `navigator.vibrate(ms or pattern)`, which iOS WebKit lacks, so the app provides it; (3) toggling a hidden `<input type="checkbox" switch>`. When two channels fire for one moment, it plays once. Options ▸ *Haptics* turns them off. |
@@ -68,8 +68,8 @@ physical iPhone; Debug builds log each one as `[VercelSim] haptic: …`.
 Not on iPhone, because a phone doesn't need them: the device frame and its finish, zoom,
 the device picker and the pointer styles.
 
-A double-tap also reaches the prototype as two taps. That's harmless on most screens;
-use the two-finger hold where a double tap would do something in the prototype.
+The options gesture uses two fingers, so a single-finger double-tap always belongs to the
+prototype (the two-finger taps still reach the page, which ignores them on most screens).
 
 ### Supported devices (verified)
 

@@ -2,7 +2,7 @@ import SwiftUI
 import WebKit
 
 /// The options sheet: everything that sits around the phone in the Mac app, as an iOS
-/// bottom sheet. Opens with a double-tap anywhere (over a prototype or on the lock screen),
+/// bottom sheet. Opens with a two-finger double-tap anywhere (over a prototype or on the lock screen),
 /// a two-finger press-and-hold, a shake, or press-and-hold on the lock screen.
 struct ControlPanel: View {
     @EnvironmentObject private var model: AppModel
@@ -115,7 +115,7 @@ struct ControlPanel: View {
                 Section {
                     Button(role: .destructive) { model.clearWebsiteData() } label: { Label("Clear cookies & cache", systemImage: "trash") }
                 } footer: {
-                    Text("Double-tap the screen to open this sheet. You can also shake the iPhone, or press and hold with two fingers.")
+                    Text("Double-tap the screen with two fingers to open this sheet. You can also shake the iPhone, or press and hold with two fingers.")
                 }
             }
             .navigationTitle("Options")

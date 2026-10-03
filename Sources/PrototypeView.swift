@@ -41,15 +41,9 @@ private struct WebViewHost: UIViewRepresentable {
             webView.topAnchor.constraint(equalTo: host.topAnchor),
             webView.bottomAnchor.constraint(equalTo: host.bottomAnchor),
         ])
-        // Double-tap anywhere opens the options sheet. It never cancels or delays touches,
-        // so the prototype still gets its own taps.
-        let doubleTap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.doubleTap(_:)))
-        doubleTap.numberOfTapsRequired = 2
-        doubleTap.cancelsTouchesInView = false
-        doubleTap.delaysTouchesEnded = false
-        doubleTap.delegate = context.coordinator
-        webView.addGestureRecognizer(doubleTap)
-        // Two-finger press-and-hold does the same, without stealing single-finger touches.
+        // The options sheet opens on a two-finger double-tap (installed on the window, see
+        // TwoFingerDoubleTap). Two-finger press-and-hold does the same; neither ever takes a
+        // single-finger touch from the prototype.
         let hold = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.hold(_:)))
         hold.numberOfTouchesRequired = 2
         hold.minimumPressDuration = 0.5
@@ -64,13 +58,6 @@ private struct WebViewHost: UIViewRepresentable {
     final class Coordinator: NSObject, UIGestureRecognizerDelegate {
         let onHold: () -> Void
         init(_ onHold: @escaping () -> Void) { self.onHold = onHold }
-
-        @objc func doubleTap(_ g: UITapGestureRecognizer) {
-            debugLog("double-tap state \(g.state.rawValue)")
-            guard g.state == .ended else { return }
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            onHold()
-        }
 
         @objc func hold(_ g: UILongPressGestureRecognizer) {
             guard g.state == .began else { return }

@@ -125,6 +125,7 @@ final class AppModel: NSObject, ObservableObject {
         // and lays out under the notch itself.
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.allowsBackForwardNavigationGestures = true
+        webView.allowsLinkPreview = false // long-press on a link: no Safari-style preview
         // Fixed to the screen: no pinch, no zoom bounce (double-tap zoom is off via CSS).
         webView.scrollView.pinchGestureRecognizer?.isEnabled = false
         webView.scrollView.bouncesZoom = false

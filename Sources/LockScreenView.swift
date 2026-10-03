@@ -41,7 +41,6 @@ struct LockScreenView: View {
             }
             .frame(width: geo.size.width, height: height)
             .contentShape(Rectangle())
-            .onTapGesture(count: 2) { model.panelOpen = true } // double-tap: options sheet
             .onTapGesture { linkFocused = false } // tap the wallpaper to put the keyboard away
             .gesture(
                 DragGesture(minimumDistance: 8)
@@ -59,7 +58,6 @@ struct LockScreenView: View {
                         }
                     }
             )
-            .simultaneousGesture(LongPressGesture(minimumDuration: 0.6).onEnded { _ in model.panelOpen = true })
 
                 // Lock-screen widget, below the clock like iOS widgets. Kept outside the
                 // swipe / press-and-hold gestures above so editing the link never triggers them.

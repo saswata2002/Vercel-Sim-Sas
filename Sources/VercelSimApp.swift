@@ -85,6 +85,8 @@ struct RootView: View {
                 .presentationDragIndicator(.visible)
         }
         .onAppear { model.refreshDevice() }
+        // Two-finger double-tap anywhere (prototype or lock screen) opens the options sheet.
+        .background(TwoFingerDoubleTap { if model.editingLink == nil { model.panelOpen = true } })
         .onReceive(NotificationCenter.default.publisher(for: .deviceDidShake)) { _ in
             model.panelOpen = true
         }
@@ -118,6 +120,51 @@ enum DisplayCorner {
         case (402, 874), (440, 956), (420, 912): return 62  // 16 Pro/Pro Max, 17 series, Air
         default: return 44
         }
+    }
+}
+
+/// Installs a two-finger double-tap recogniser on the window, so it works over everything
+/// (the web view, the lock screen and its widgets) without taking touches from any of them.
+/// A single finger never triggers it: one-finger double-taps belong to the prototype.
+private struct TwoFingerDoubleTap: UIViewRepresentable {
+    let action: () -> Void
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> Installer {
+        let v = Installer()
+        v.coordinator = context.coordinator
+        v.isUserInteractionEnabled = false
+        return v
+    }
+    func updateUIView(_ v: Installer, context: Context) { context.coordinator.action = action }
+
+    final class Installer: UIView {
+        weak var coordinator: Coordinator?
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard let window, let coordinator, coordinator.recognizer.view !== window else { return }
+            window.addGestureRecognizer(coordinator.recognizer)
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var action: () -> Void = {}
+        lazy var recognizer: UITapGestureRecognizer = {
+            let g = UITapGestureRecognizer(target: self, action: #selector(fire(_:)))
+            g.numberOfTouchesRequired = 2
+            g.numberOfTapsRequired = 2
+            g.cancelsTouchesInView = false   // the page still gets every touch
+            g.delaysTouchesBegan = false
+            g.delaysTouchesEnded = false
+            g.delegate = self
+            return g
+        }()
+        @objc func fire(_ g: UITapGestureRecognizer) {
+            guard g.state == .ended else { return }
+            debugLog("two-finger double-tap → options")
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            action()
+        }
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
     }
 }
 
