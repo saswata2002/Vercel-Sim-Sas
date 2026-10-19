@@ -12,7 +12,7 @@ struct PrototypeMenu: View {
     private let pad = LWFloatingSheet<EmptyView>.pad
 
     /// The push between pages: one spring for the slide and the sheet's height together.
-    private static let push = Animation.spring(response: 0.42, dampingFraction: 0.92)
+    private static let push = Animation.spring(response: 0.4, dampingFraction: 1)
     /// Every page's height, measured off screen, so the sheet resizes during the slide
     /// rather than after it.
     @State private var heights: [Page: CGFloat] = [:]
@@ -21,19 +21,16 @@ struct PrototypeMenu: View {
 
     var body: some View {
         ZStack(alignment: .top) {
-            // Like a navigation push: each page is opaque and the deeper one sits on top, so
-            // going in it slides over the menu (which drifts left and dims underneath), and
-            // going back it slides off to reveal the menu.
+            // An in-sheet page change: the old page shifts a little and fades out softly while
+            // the new one fades in from the other side; the sheet resizes in the same spring.
             pageView(page)
                 .frame(maxWidth: .infinity, alignment: .top)
-                .background(LW.bg)
                 .id(page)
-                .zIndex(Double(Self.depth(page)))
                 .transition(.asymmetric(
-                    insertion: .modifier(active: PageSlide(x: forward ? 1 : -0.28, dim: forward ? 1 : 0.55),
-                                         identity: PageSlide(x: 0, dim: 1)),
-                    removal: .modifier(active: PageSlide(x: forward ? -0.28 : 1, dim: forward ? 0.55 : 1),
-                                       identity: PageSlide(x: 0, dim: 1))))
+                    insertion: .modifier(active: PageFade(x: forward ? 24 : -24, shown: false),
+                                         identity: PageFade(x: 0, shown: true)),
+                    removal: .modifier(active: PageFade(x: forward ? -24 : 24, shown: false),
+                                       identity: PageFade(x: 0, shown: true))))
         }
         .frame(maxWidth: .infinity, alignment: .top)
         // Measure every page invisibly, at the sheet's width.
@@ -55,10 +52,6 @@ struct PrototypeMenu: View {
         .frame(maxHeight: .infinity, alignment: .top)
         .clipped()
         .environment(\.colorScheme, .dark)
-    }
-
-    private static func depth(_ p: Page) -> Int {
-        switch p { case .main: 0; case .settings, .recents: 1; case .push: 2 }
     }
 
     @ViewBuilder
@@ -382,13 +375,16 @@ private struct IterationScroller<Chip: View>: View {
     }
 }
 
-/// A page sliding during the push: `x` is a fraction of the width; `dim` is its opacity.
-private struct PageSlide: ViewModifier {
+/// A page during a change: shifted by `x` points, and faded, softly blurred and a touch
+/// smaller while not `shown`.
+private struct PageFade: ViewModifier {
     let x: CGFloat
-    let dim: Double
+    let shown: Bool
     func body(content: Content) -> some View {
         content
-            .opacity(dim)
-            .visualEffect { v, proxy in v.offset(x: x * proxy.size.width) }
+            .opacity(shown ? 1 : 0)
+            .blur(radius: shown ? 0 : 6)
+            .scaleEffect(shown ? 1 : 0.98, anchor: .top)
+            .offset(x: x)
     }
 }
