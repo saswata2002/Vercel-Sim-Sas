@@ -121,7 +121,20 @@ struct LinkDirectoryWidget: View {
     /// Scroll position, for the edge feathers: the list's frame in the scroll view's space.
     @State private var content: CGRect = .zero
     @State private var viewport: CGFloat = 0
+    /// A real row's height (the lazy stack only estimates rows it hasn't laid out yet).
+    @State private var rowHeight: CGFloat = 0
     private static let feather: CGFloat = 28
+    /// At most this many rows show at once; more scroll inside the card.
+    private static let visibleRows = 5
+
+    /// The list's height: all rows while they fit, else exactly `visibleRows` of them.
+    private var listHeight: CGFloat? {
+        // From a real row's height: the lazy stack's own height is only an estimate for rows
+        // it hasn't laid out, and lags when links are added, which cut the last row off.
+        let rows = min(directory.links.count, Self.visibleRows)
+        if rowHeight > 0, rows > 0 { return (rowHeight * CGFloat(rows) + CGFloat(rows - 1)).rounded() } // rows + hairlines
+        return content.height > 0 ? content.height : nil
+    }
 
     /// 0…1: how much is hidden past each edge (fades in over the first 20 pt of scroll).
     private var topFade: CGFloat { min(max(-content.minY / 20, 0), 1) }
@@ -129,19 +142,16 @@ struct LinkDirectoryWidget: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Link Directory").font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.85))
-                Spacer(minLength: 8)
-                // How many are saved; rolls to the new number as links are added or deleted.
+            HStack(alignment: .center, spacing: 8) {
+                Text("Link Directory").font(LW.title).foregroundStyle(LW.ink)
+                // How many are saved: the kit's count pill; rolls as links are added or deleted.
                 if !directory.links.isEmpty {
-                    Text("\(directory.links.count) \(directory.links.count == 1 ? "link" : "links")")
-                        .font(.system(size: 13, weight: .medium).monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.5))
+                    LWCountPill(text: "\(directory.links.count)")
                         .contentTransition(.numericText(value: Double(directory.links.count)))
-                        .animation(.snappy, value: directory.links.count)
+                        .animation(LW.easeOut(240), value: directory.links.count)
                         .accessibilityLabel("\(directory.links.count) saved")
                 }
+                Spacer(minLength: 8)
             }
 
             if directory.links.isEmpty {
@@ -151,17 +161,18 @@ struct LinkDirectoryWidget: View {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(spacing: 0) {
                         ForEach(Array(directory.links.enumerated()), id: \.element.id) { index, link in
-                            if index > 0 { Rectangle().fill(.white.opacity(0.1)).frame(height: 0.5).padding(.leading, 44) }
+                            if index > 0 { LWHairline(inset: 44) }
                             LinkRow(link: link, openRow: $openRow, open: { model.open(link.url) },
                                     edit: { model.editingLink = link }, remove: { directory.remove(link) })
+                                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { h in if index == 0 { rowHeight = h } }
                                 .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                     }
                     .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("ldScroll")) }) { content = $0 }
                 }
                 .coordinateSpace(.named("ldScroll"))
-                // Hug the rows when they fit; otherwise take the space offered and scroll.
-                .frame(maxHeight: content.height > 0 ? content.height : nil)
+                // Hug the rows up to five; past that (or when the screen is too short) scroll.
+                .frame(maxHeight: listHeight)
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { viewport = $0 }
                 // Rows feather out at the edges they scroll under instead of being cut off;
                 // each edge only fades while there's more list beyond it.
@@ -181,10 +192,7 @@ struct LinkDirectoryWidget: View {
             }
         }
         .padding(16)
-        .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(.ultraThinMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(.white.opacity(0.22), lineWidth: 1))
-        .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
-        .environment(\.colorScheme, .dark)
+        .lwSurface(radius: LW.R.sheet)
     }
 }
 
@@ -214,13 +222,12 @@ private struct LinkRow: View {
             if offset > 0 {
                 Button { startEdit() } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "pencil").font(.system(size: 14, weight: .semibold))
-                        if offset > 96 { Text("Edit").font(.system(size: 14, weight: .semibold)) }
+                        Image(systemName: "pencil").font(.system(size: 14, weight: .medium))
+                        if offset > 96 { Text("Edit").font(LW.ui) }
                     }
-                    .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.18), radius: 1, y: 0.5)
+                    .foregroundStyle(LW.ink)
                     .frame(width: max(offset - 6, 0), height: 44)
-                    .modifier(LiquidGlassAction(tint: LiquidGlassAction.blue))
+                    .modifier(LWSwipeAction(fill: LW.wash(4)))           // soft: a secondary action
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Edit")
@@ -230,13 +237,12 @@ private struct LinkRow: View {
             if offset < 0 {
                 Button(role: .destructive) { delete() } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "trash.fill").font(.system(size: 13, weight: .semibold))
-                        if -offset > 96 { Text("Delete").font(.system(size: 14, weight: .semibold)) }
+                        Image(systemName: "trash").font(.system(size: 14, weight: .medium))
+                        if -offset > 96 { Text("Delete").font(LW.ui) }
                     }
                     .foregroundStyle(.white)
-                    .shadow(color: .black.opacity(0.18), radius: 1, y: 0.5)
                     .frame(width: max(-offset - 6, 0), height: 44)
-                    .modifier(LiquidGlassAction(tint: LiquidGlassAction.red))
+                    .modifier(LWSwipeAction(fill: LW.dangerSolid))       // solid danger: it confirms the delete
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Delete")
@@ -268,42 +274,10 @@ private struct LinkRow: View {
             open()
         }
         // Simultaneous, and horizontal-only, so vertical drags still scroll the list.
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 14)
-                .onChanged { v in
-                    guard dragging || abs(v.translation.width) > abs(v.translation.height) * 1.4 else { return }
-                    if !dragging { dragging = true; openRow = link.id }
-                    let x = restOffset + v.translation.width
-                    // Gentle resistance past either button.
-                    offset = abs(x) <= Self.reveal ? x : (x > 0 ? 1 : -1) * (Self.reveal + (abs(x) - Self.reveal) * 0.9)
-                    let armed = offset > rowWidth * Self.fullEdit
-                    if armed != editArmed { editArmed = armed; if armed { UISelectionFeedbackGenerator().selectionChanged() } }
-                }
-                .onEnded { v in
-                    guard dragging else { return }
-                    dragging = false
-                    editArmed = false
-                    let width = rowWidth
-                    let predicted = v.predictedEndTranslation.width + restOffset
-                    if offset < 0 {
-                        // Delete only on a deliberate long swipe: well past the button, or a fling
-                        // that started past it. A quick short flick just shows Delete.
-                        if -offset > width * Self.fullSwipe || (-offset > Self.reveal + 40 && predicted < -width * 1.1) {
-                            delete()
-                        } else if offset < -Self.reveal / 2 || v.predictedEndTranslation.width < -120 {
-                            settle(at: -Self.reveal)
-                        } else {
-                            close()
-                        }
-                    } else if offset > width * Self.fullEdit {
-                        startEdit()
-                    } else if offset > Self.reveal / 2 || v.predictedEndTranslation.width > 120 {
-                        settle(at: Self.reveal)
-                    } else {
-                        close()
-                    }
-                }
-        )
+        // Swipe: a horizontal-only pan. On iOS 18+ it's a UIKit recogniser that refuses to start
+        // on vertical movement, so the list scrolls like a native one (a SwiftUI DragGesture on
+        // scroll content competes with the scroll view and wins slow or diagonal drags).
+        .modifier(RowSwipe(changed: dragChanged, ended: dragEnded))
         .background(GeometryReader { g in Color.clear.onAppear { rowWidth = g.size.width }.onChange(of: g.size.width) { _, w in rowWidth = w } })
         .onChange(of: openRow) { _, id in if id != link.id, offset != 0 { close() } }
         .contextMenu {
@@ -317,6 +291,46 @@ private struct LinkRow: View {
         .accessibilityAction(named: "Delete") { remove() }
     }
 
+    private func dragChanged(_ tx: CGFloat) {
+        if !dragging { dragging = true; openRow = link.id }
+        let x = restOffset + tx
+        // Gentle resistance past either button.
+        offset = abs(x) <= Self.reveal ? x : (x > 0 ? 1 : -1) * (Self.reveal + (abs(x) - Self.reveal) * 0.9)
+        let armed = offset > rowWidth * Self.fullEdit
+        if armed != editArmed { editArmed = armed; if armed { UISelectionFeedbackGenerator().selectionChanged() } }
+    }
+
+    /// `flung`: where the swipe would come to rest at its release speed (translation + momentum).
+    private func dragEnded(_ tx: CGFloat, _ flung: CGFloat) {
+        guard dragging else { return }
+        dragging = false
+        editArmed = false
+        // Cancelled (see HorizontalPan): back to the rest position, no action.
+        if tx.isNaN {
+            if restOffset == 0 { close() } else { settle(at: restOffset) }
+            return
+        }
+        let width = rowWidth
+        let predicted = flung + restOffset
+        if offset < 0 {
+            // Delete only on a deliberate long swipe: well past the button, or a fling
+            // that started past it. A quick short flick just shows Delete.
+            if -offset > width * Self.fullSwipe || (-offset > Self.reveal + 40 && predicted < -width * 1.1) {
+                delete()
+            } else if offset < -Self.reveal / 2 || flung < -120 {
+                settle(at: -Self.reveal)
+            } else {
+                close()
+            }
+        } else if offset > width * Self.fullEdit {
+            startEdit()
+        } else if offset > Self.reveal / 2 || flung > 120 {
+            settle(at: Self.reveal)
+        } else {
+            close()
+        }
+    }
+
     /// Where the row rests: 0, or swiped open to show Delete (−) or Edit (+).
     @State private var restOffset: CGFloat = 0
     @State private var editArmed = false
@@ -324,22 +338,18 @@ private struct LinkRow: View {
 
     private var content: some View {
         HStack(spacing: 12) {
-            Text(String(link.host.prefix(1)).uppercased())
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 32, height: 32)
-                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(.white.opacity(0.16)))
-            VStack(alignment: .leading, spacing: 1) {
+            LWLetterBadge(letter: String(link.host.prefix(1)).uppercased())
+            VStack(alignment: .leading, spacing: 2) {
                 Text(link.label)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(.white)
+                    .font(LW.bodyMedium)
+                    .foregroundStyle(LW.ink)
                     .lineLimit(1)
                 // Second line only when it adds something: the address under a title,
                 // or the path under a bare host.
                 if let detail = link.hasLabel ? link.host + link.path : (link.path.isEmpty ? nil : link.path) {
                     Text(detail)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white.opacity(0.55))
+                        .font(LW.sans(13))
+                        .foregroundStyle(LW.muted)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -379,47 +389,12 @@ private struct LinkRow: View {
     }
 }
 
-/// Tinted Liquid Glass for the swipe actions: the system material on iOS 26 (it refracts
-/// the wallpaper and reacts to touch), and a close hand-built version on earlier iOS.
-private struct LiquidGlassAction: ViewModifier {
-    static let red = Color(red: 1, green: 0.27, blue: 0.23)
-    static let blue = Color(red: 0.16, green: 0.52, blue: 1)
-    let tint: Color
+/// A swipe action in the kit's button shape: `control` radius, flat fill, no glass or shadow.
+private struct LWSwipeAction: ViewModifier {
+    let fill: Color
     func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content
-                .contentShape(Capsule())
-                .glassEffect(.regular.tint(tint.opacity(0.48)).interactive(), in: Capsule())
-                .overlay {
-                    // Rim light and a soft top sheen, so it reads as a lens even on a flat card.
-                    ZStack {
-                        Capsule().strokeBorder(LinearGradient(colors: [.white.opacity(0.7), .white.opacity(0.08), .white.opacity(0.28)],
-                                                              startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
-                        Capsule().fill(LinearGradient(colors: [.white.opacity(0.26), .clear], startPoint: .top, endPoint: .center))
-                            .padding(.horizontal, 6).padding(.top, 2).padding(.bottom, 22)
-                            .blur(radius: 1.5)
-                    }
-                    .allowsHitTesting(false)
-                }
-                .shadow(color: tint.opacity(0.3), radius: 10, y: 4)
-        } else {
-            content
-                .background {
-                    ZStack {
-                        Capsule().fill(.ultraThinMaterial)
-                        Capsule().fill(tint.opacity(0.55))
-                        // Specular highlight along the top, fading down.
-                        Capsule().fill(LinearGradient(colors: [.white.opacity(0.38), .white.opacity(0.04), .clear],
-                                                      startPoint: .top, endPoint: .center))
-                            .padding(1)
-                        // Bright rim, stronger at the top-left like light on a lens.
-                        Capsule().strokeBorder(LinearGradient(colors: [.white.opacity(0.75), .white.opacity(0.12), .white.opacity(0.35)],
-                                                              startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
-                    }
-                    .shadow(color: tint.opacity(0.35), radius: 8, y: 3)
-                }
-                .environment(\.colorScheme, .dark)
-        }
+        let shape = RoundedRectangle(cornerRadius: LW.R.control, style: .continuous)
+        content.background(shape.fill(fill)).contentShape(shape)
     }
 }
 
@@ -436,7 +411,7 @@ private struct RowPress: ButtonStyle {
 struct LinkEditor: View {
     let link: SavedLink
     let save: (String, URL) -> Void
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.floatingDismiss) private var dismiss
     @State private var name: String
     @State private var url: String
     @FocusState private var field: Field?
@@ -453,72 +428,65 @@ struct LinkEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack {
-                Button("Cancel") { dismiss() }
-                    .foregroundStyle(.white.opacity(0.8))
-                Spacer()
-                Text("Edit Link").font(.system(size: 17, weight: .semibold))
-                Spacer()
-                Button("Save") { commit() }
-                    .font(.system(size: 17, weight: .semibold))
-                    .disabled(parsed == nil)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Edit link").font(LW.title).foregroundStyle(LW.ink)
+                Text("Rename it, or point it at a different URL.").font(LW.sans(14)).foregroundStyle(LW.muted)
             }
-            .font(.system(size: 17))
 
-            VStack(alignment: .leading, spacing: 10) {
-                fieldRow("Name") {
-                    TextField(link.title ?? link.host, text: $name)
+            // The kit's inputs: label above, hint below; an error replaces the hint.
+            VStack(alignment: .leading, spacing: 14) {
+                field("Name", hint: name.trimmingCharacters(in: .whitespaces).isEmpty ? "No name: the page\u{2019}s own title is shown." : nil, focused: field == .name) {
+                    TextField("", text: $name, prompt: Text(link.title ?? link.host).foregroundStyle(LW.muted))
                         .focused($field, equals: .name)
                         .submitLabel(.done)
                         .onSubmit(commit)
                     if !name.isEmpty {
-                        Button { name = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.white.opacity(0.45)) }
-                            .buttonStyle(.plain)
+                        LWIconButton(symbol: "xmark", look: .ghost, size: 26) { name = "" }
                             .accessibilityLabel("Clear name")
                     }
                 }
-                fieldRow("URL") {
-                    TextField("https://…", text: $url)
+                field("URL", hint: parsed == nil ? nil : "Only changes if you edit it.", error: parsed == nil ? "That isn\u{2019}t a valid link." : nil, focused: field == .url) {
+                    TextField("", text: $url, prompt: Text("https://…").foregroundStyle(LW.muted))
                         .focused($field, equals: .url)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .submitLabel(.done)
                         .onSubmit(commit)
-                        .foregroundStyle(parsed == nil ? Color(red: 1, green: 0.45, blue: 0.4) : .white.opacity(0.75))
                 }
-                Text(name.trimmingCharacters(in: .whitespaces).isEmpty
-                     ? "No name: the page's own title is shown."
-                     : "The URL only changes if you edit it.")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .padding(.leading, 4)
             }
-            Spacer(minLength: 0)
+
+            // Dialog footer: pills, concentric with the card's bottom corners; one primary.
+            HStack(spacing: 10) {
+                Button("Cancel") { dismiss() }.buttonStyle(LWButton(variant: .secondary, radius: 24, height: 48, fill: true))
+                Button("Save") { commit() }.buttonStyle(LWButton(variant: .primary, radius: 24, height: 48, fill: true)).disabled(parsed == nil)
+            }
+            .padding(.top, 4)
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 20)
-        .tint(.white)
+        // One margin on every side (the floating sheet's), with the title a little lower.
+        .padding(.horizontal, LWFloatingSheet<EmptyView>.pad)
+        .padding(.top, 22)
+        .padding(.bottom, LWFloatingSheet<EmptyView>.pad)
+        .tint(LW.ink)
         .environment(\.colorScheme, .dark)
-        .presentationDetents([.height(290)])
-        .presentationDragIndicator(.visible)
-        .presentationCornerRadius(32)
         .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { field = .name } }
     }
 
-    private func fieldRow<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
-        HStack(spacing: 10) {
-            Text(title)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.55))
-                .frame(width: 44, alignment: .leading)
-            content()
+    private func field<Content: View>(_ label: String, hint: String?, error: String? = nil, focused: Bool, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(LW.label).foregroundStyle(LW.ink)
+            HStack(spacing: 6) { content() }
+                .font(LW.body)
+                .foregroundStyle(LW.ink)
+                .padding(.leading, 14)
+                .padding(.trailing, 8)
+                .lwField(focused: focused, invalid: error != nil, height: 44)
+            if let text = error ?? hint {
+                Text(text).font(LW.caption).foregroundStyle(error != nil ? LW.danger : LW.muted)
+                    .transition(.opacity)
+            }
         }
-        .font(.system(size: 16))
-        .padding(.horizontal, 14)
-        .frame(height: 48)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.white.opacity(0.1)))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+        .animation(LW.easeOut, value: error)
     }
 
     private func commit() {
@@ -533,36 +501,95 @@ struct LinkEditor: View {
     }
 }
 
-/// Nothing saved yet: a glass link badge, a short headline and where links come from.
+/// Nothing saved yet: the kit's empty state — a wash-1 well with an icon tile, a title and one line.
 private struct LinkDirectoryEmpty: View {
     var body: some View {
         VStack(spacing: 0) {
-            ZStack {
-                Circle().fill(.white.opacity(0.1))
-                Circle().strokeBorder(LinearGradient(colors: [.white.opacity(0.45), .white.opacity(0.08), .white.opacity(0.2)],
-                                                     startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
-                Image(systemName: "link")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.85))
-            }
-            .frame(width: 48, height: 48)
-            .padding(.bottom, 14)
-
+            LWIconTile(symbol: "link", size: 44)
+                .padding(.bottom, 12)
             Text("No saved links yet")
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.9))
+                .font(LW.sans(15, .semibold))
+                .foregroundStyle(LW.ink)
                 .padding(.bottom, 4)
             Text("Paste a Vercel link above. Prototypes you open are saved here.")
-                .font(.system(size: 13))
-                .foregroundStyle(.white.opacity(0.55))
+                .font(LW.sans(13))
+                .foregroundStyle(LW.muted)
                 .multilineTextAlignment(.center)
-                .lineSpacing(2)
+                .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 250)
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 10)
-        .padding(.bottom, 14)
+        .padding(.vertical, 22)
+        .background(RoundedRectangle(cornerRadius: LW.R.tile, style: .continuous).fill(LW.wash(1)))
+        .overlay(RoundedRectangle(cornerRadius: LW.R.tile, style: .continuous).strokeBorder(LW.line, style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
+        .padding(.top, 4)
         .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: - row swipe gesture
+
+/// Horizontal swipe for a row. iOS 18+: a UIKit pan that only begins when the movement is
+/// clearly sideways, so vertical drags always go to the list's scroll view. iOS 17: the
+/// previous simultaneous DragGesture.
+private struct RowSwipe: ViewModifier {
+    let changed: (CGFloat) -> Void
+    let ended: (_ translation: CGFloat, _ flung: CGFloat) -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.gesture(HorizontalPan(changed: changed, ended: ended))
+        } else {
+            content.simultaneousGesture(
+                DragGesture(minimumDistance: 14)
+                    .onChanged { v in
+                        guard abs(v.translation.width) > abs(v.translation.height) * 1.4 else { return }
+                        changed(v.translation.width)
+                    }
+                    .onEnded { v in ended(v.translation.width, v.predictedEndTranslation.width) }
+            )
+        }
+    }
+}
+
+@available(iOS 18.0, *)
+private struct HorizontalPan: UIGestureRecognizerRepresentable {
+    let changed: (CGFloat) -> Void
+    let ended: (CGFloat, CGFloat) -> Void
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let g = UIPanGestureRecognizer()
+        g.maximumNumberOfTouches = 1
+        g.delegate = context.coordinator
+        return g
+    }
+
+    func handleUIGestureRecognizerAction(_ g: UIPanGestureRecognizer, context: Context) {
+        let t = g.translation(in: g.view).x
+        switch g.state {
+        case .began, .changed: changed(t)
+        case .ended:
+            // Momentum like SwiftUI's predictedEndTranslation: where a fling at this speed would land.
+            ended(t, t + g.velocity(in: g.view).x * 0.18)
+        case .cancelled, .failed:
+            // Interrupted (a call, backgrounding, the list scrolling): never delete or edit on
+            // that, just settle back to where the row was.
+            ended(.nan, .nan)
+        default: break
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        /// Only start for clearly sideways movement; anything else is the list's scroll.
+        func gestureRecognizerShouldBegin(_ g: UIGestureRecognizer) -> Bool {
+            guard let pan = g as? UIPanGestureRecognizer else { return true }
+            let v = pan.velocity(in: pan.view), t = pan.translation(in: pan.view)
+            let dx = abs(v.x) > 1 || abs(v.y) > 1 ? abs(v.x) : abs(t.x)
+            let dy = abs(v.x) > 1 || abs(v.y) > 1 ? abs(v.y) : abs(t.y)
+            return dx > dy * 1.3
+        }
     }
 }

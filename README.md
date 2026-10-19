@@ -23,9 +23,13 @@ Signing & Capabilities.
 | | |
 |---|---|
 | Link widget | The **Open a prototype** card under the clock. Paste (press and hold in the field) or type a Vercel link and tap the arrow (or Go) to load it. The ✕ clears the field; an invalid link shakes the card and says so. |
-| Link Directory | The card under *Open a prototype*. Every link you submit (widget or options sheet) is saved automatically once its page loads. Typos, unreachable servers and HTTP error pages (404, 500…) are never saved: newest first, no duplicates, titled from the page once it loads (e.g. *noon — Home*). Tap a row to open it. Swipe left to delete: a short swipe shows Delete, a long one deletes at once. Swipe right to edit: a short swipe shows Edit, a long one opens the editor. There you can rename the link, and change its URL only if you edit it. Your name is never replaced by the page title, and clearing it brings the title back. Press and hold for Edit / Copy Link / Remove. File links (images, PDFs…) are skipped. Long lists scroll inside the card. |
-| Lock screen | Your wallpaper, plus the live date and time in the Figma typography (Motion (Sas) 1526:74437). **Swipe up** resumes the open prototype, or the most recent one. With nothing to open, it shows the panel. |
+| Link Directory | The card under *Open a prototype*. Every link you submit (widget or options sheet) is saved automatically once its page loads. Typos, unreachable servers and HTTP error pages (404, 500…) are never saved: newest first, no duplicates, titled from the page once it loads (e.g. *noon — Home*). Tap a row to open it. Swipe left to delete: a short swipe shows Delete, a long one deletes at once. Swipe right to edit: a short swipe shows Edit, a long one opens the editor. There you can rename the link, and change its URL only if you edit it. Your name is never replaced by the page title, and clearing it brings the title back. Press and hold for Edit / Copy Link / Remove. File links (images, PDFs…) are skipped. Up to **5 rows** show at once; more scroll inside the card, feathering out at the edges. |
+| How-to guide | The **Quick tour** pill at the foot of the lock screen opens a 5-page guide, one animated picture and one line each: paste a link, saved links (swipe to edit/delete), swipe up to return, two-finger double-tap for Options, switching iterations. It plays through by itself (5 s a page, stopping on the last); swipe or tap a dot to jump. The one button, **Got It**, closes it from any page; there is no Skip or Next. It also opens by itself once, on the very first launch (`guideSeen` in UserDefaults). |
+| Pushed from web | A lock-screen card under the Link Directory lists links received from the Vercel Sim Push page (newest first, up to 2 shown, 20 kept), with who sent them and when, and the room's status (Live / Connecting / Offline). Tap one to open it; press and hold to copy it or clear the list. With no room joined it offers **Set up** (Options). It shrinks to the latest push on short screens. |
+| Floating sheets | Options, Edit link and the guide are floating cards: inset 10 pt from the sides and bottom, every corner rounded concentric with the display, a hairline border and a soft shadow. No visible handle: drag the top edge down or tap outside to close; they rise above the keyboard. Drawn by the app (`LWFloatingSheet` in Lightweight.swift) rather than the system sheet, whose iOS 26 glass edge doubled the border. |
+| Lock screen | The Lightweight UI dark canvas (dot grid) with the cards; no wallpaper, date or time. **Swipe up** resumes the open prototype, or the most recent one. With nothing to open, it shows the panel. |
 | Options sheet | **Double-tap with two fingers anywhere** (over a prototype or on the lock screen) to open a bottom sheet with every option. A single-finger double-tap always goes to the prototype. A two-finger press-and-hold or a shake (Simulator: ⌃⌘Z) also opens it. Contents: the iteration selector (numbers, reset and any other controls such as *Spec Sheet*), the address field, Reload, Screenshot (share sheet), Home, recents, status bar, home indicator, 375 scaling, the on-screen iteration pill, Appearance, device details, and Clear cookies & cache. |
+| Options over a prototype | A browser-style menu that fits without scrolling: an address pill (back · forward within the prototype · tap the address to type a new link · copy link · reload), the iteration chips and Spec Sheet, tiles for Home / Screenshot / Share / Recents, icon rows for Status bar and Haptics (checkboxes) and Settings. Settings is a second page (home indicator, 375 scaling, iteration pill, Push from the web, Clear cookies & cache). On the lock screen the full Options list is shown instead. |
 | Iteration selector | The prototype's own picker (1 · 2 · 3 · 4 · reset · Spec Sheet…) is detected and hidden in the page, then shown in the options sheet. Turn on *Iteration pill on screen* for a floating pill. |
 | Device fit (automatic) | The app detects the iPhone (model, screen, scale, safe areas) and locks the page's viewport to `width=375` at a fixed scale of screen width ÷ 375, with `user-scalable=no`. The design lays out at exactly 375 CSS px (including `100vw`), keeps its proportions, and fills the screen. The height follows the device's aspect ratio, and safe areas reach the page as `env(safe-area-inset-*)` in its own px. The page's own viewport tag is rewritten, keeping keys like `interactive-widget`. |
 | No zoom | Pinch zoom, double-tap zoom and zoom bounce are all off, so the prototype stays fixed to the screen. Pressing and holding never selects text or shows a callout or link preview, so it feels like an app, not a web page (text fields still select normally). |
@@ -46,6 +50,28 @@ Vercel sign-ins (Deployment Protection) are remembered between launches.
 - **While a prototype is showing:** Reload, iteration switches and links hold the current screen and cross-fade to the new one, never showing a blank page.
 - **If a link fails to load:** the widget shakes and shows the error, so you're never dropped onto an error screen.
 - **Haptics:** haptics from a page loading behind the lock screen are held back.
+
+### Links from other apps
+
+iOS only hands a website's links to an app when the website lists that app (an
+`apple-app-site-association` file on the domain). vercel.app is Vercel's domain, so no app
+can take over vercel.app links, and a link tapped in WhatsApp, Gmail or Google Chat opens in
+Safari or the in-app browser. Two ways in:
+
+- **Share sheet:** share the link to **Vercel Sim**. In WhatsApp, Gmail and Chat you can
+  long-press the link and choose Share; in Safari, use Share. The share extension
+  (`ShareExtension/`, target `VercelSimShare`) takes the link exactly as shared, including
+  the path, `?query` and `#fragment`. It also works when the share is text with a link in it,
+  as WhatsApp sends. It then opens the app on that preview.
+- **URL scheme:** `vercelsim://open?url=<percent-encoded link>` or
+  `vercelsim://my-app.vercel.app/path?q#f`, from Shortcuts, Notes, a QR code or a web page.
+
+A link that differs from the running prototype only in its query or #fragment loads as a new
+preview. The exact same URL just brings the running page back.
+
+```bash
+xcrun simctl openurl booted 'vercelsim://open?url=https%3A%2F%2Fmy-app.vercel.app%2F%3Fv%3D2%23top'
+```
 
 ### Haptics mapping
 
@@ -98,6 +124,27 @@ Loads wait until the web view is on screen with a real size. A load that started
 zoom lock is checked and re-applied if needed. If WebKit's page process dies, the page
 reloads instead of going blank.
 
+## Push from the web
+
+`../vercel-sim-push` is a web page that pushes links straight into the app. Scan a room's QR code with the Camera (`vercelsim://pair?room=…`) or paste its invite link into the link field, and links pushed to that room open here (or are saved, with a card to open them). Receipts and Live/Away status go back to the page. `Sources/PushHub.swift` holds the client: rooms, the ntfy.sh stream, AES-GCM. `Sources/PushViews.swift` holds the drop-in card and the Options section. It only works while the app is in the foreground; pushes sent while it was away arrive when it comes back. See `../vercel-sim-push/README.md` for the protocol.
+
+## Reliability notes
+
+- **Swipe back / forward** works only within the prototype you opened. It never goes back to
+  a blank page or to an earlier prototype, and pages restored by a back swipe are shown at
+  once (no held snapshot).
+- **Cross-fades** (a link or an iteration inside the page) always finish: on the page's
+  ready signal, shortly after it finishes loading, or when the load is cancelled.
+- **Links the page can't show** (tel:, mailto:, App Store…) are handed to iOS; vercelsim://
+  links inside a page open here.
+- **Back from the background:** if iOS ended the page's process, the page that was on
+  screen reloads straight away.
+- **Interrupted gestures** (a call, Control Center) spring back: the lock-screen swipe, the
+  sheet drag, the guide's slides and a saved link's swipe (which never deletes on an
+  interruption).
+- **Try again** on the error screen retries the link that failed; **Home** remembers the
+  page you were on, so swiping up reopens it.
+
 ## Launch arguments (testing)
 
 `-url <url>` opens a prototype straight away, `-panel` shows the control panel,
@@ -108,3 +155,12 @@ For example:
 ```bash
 xcrun simctl launch booted com.prototype.vercelsim -url https://product-upscale.vercel.app -pill
 ```
+
+## Look: Lightweight UI
+
+The app uses noon's **Lightweight UI** kit (github:ayaneshu/lightweight-ui-kit, https://lightweight-ui-kit.vercel.app). Its tokens live in `Sources/Lightweight.swift` (`LW.*`):
+- **Look:** the kit's dark theme on all of the app's own screens (Options ▸ Appearance only sets how prototypes are shown), hairline cards with no glass or shadow, and wash fills for pills, tiles and empty states.
+- **Type:** Geist (Regular / Medium / SemiBold) for UI text, and Geist Pixel Square for big figures.
+- **Controls:** 12 px inputs whose border turns ink on focus; one solid ink primary button per screen; solid danger only for the final delete; every press scales to 97% on the kit's ease-out.
+- **Fonts:** `Sources/Resources/Fonts/` holds static TTFs made from the kit's own woff2 files, under the SIL Open Font License (OFL.txt), and they're registered in Info.plist ▸ UIAppFonts.
+- **Lock screen:** no clock. It's the paper canvas with a faint dot grid, the Open a prototype card and the Link Directory.

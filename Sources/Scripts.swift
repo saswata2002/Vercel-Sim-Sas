@@ -64,6 +64,10 @@ enum Scripts {
       const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.__vsReady;
       if (!h || window.__vsReadyArmed) return;
       window.__vsReadyArmed = true;
+      // Back from the back-forward cache: no load event and no new scripts, but it's ready.
+      addEventListener('pageshow', (e) => {
+        if (e.persisted) requestAnimationFrame(() => { try { h.postMessage({ href: location.href, why: 'bfcache' }); } catch (_) {} });
+      });
       const cap = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(r, ms))]);
       const loaded = new Promise((r) => (document.readyState === 'complete' ? r() : addEventListener('load', r, { once: true })));
       const domReady = new Promise((r) => (document.readyState !== 'loading' ? r() : document.addEventListener('DOMContentLoaded', r, { once: true })));

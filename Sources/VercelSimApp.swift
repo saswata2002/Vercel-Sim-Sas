@@ -7,11 +7,17 @@ import SwiftUI
 @main
 struct VercelSimApp: App {
     @StateObject private var model = AppModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(model)
+                .onOpenURL { model.openIncoming($0) }   // vercelsim://open?url=… (share sheet, shortcuts)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { model.appBecameActive(); model.push.start() }
+            if phase == .background { model.push.stop() }
         }
     }
 }
@@ -30,7 +36,7 @@ struct RootView: View {
                 // opening: 94% → 100%, faded in, rounded corners → square. Until its first
                 // complete screen is painted, a plain backdrop stands in for it.
                 ZStack {
-                    Color(uiColor: .systemBackground)
+                    LW.bg
                     PrototypeView()
                         .opacity(model.contentShown ? 1 : 0.001)
                     if let launch = model.launchImage {
@@ -56,6 +62,7 @@ struct RootView: View {
 
                 if let error = model.loadError, revealed {
                     LoadErrorView(message: error)
+                        .environment(\.colorScheme, .dark)
                 }
 
                 // Always mounted; slides fully off the top (past the safe area) when revealed.
@@ -78,17 +85,34 @@ struct RootView: View {
         // Over a prototype the system chrome is opt-in; the lock screen always shows it.
         .statusBarHidden(!model.lockVisible && !model.showStatusBar)
         .persistentSystemOverlays(!model.lockVisible && !model.showHomeIndicator ? .hidden : .automatic)
+        // The app's own screens are always the kit's dark theme; over a prototype, the
+        // Appearance option (System / Light / Dark) decides how the page is shown.
         .preferredColorScheme(model.lockVisible ? .dark : model.appearance.colorScheme)
-        .sheet(isPresented: $model.panelOpen) {
+        // Options: a floating sheet over everything (the prototype or the lock screen).
+        .lwFloatingSheet(isPresented: $model.panelOpen,
+                         height: model.currentURL != nil && !model.lockVisible
+                            ? min(model.menuHeight > 0 ? model.menuHeight : .infinity, UIScreen.main.bounds.height * 0.9)
+                            : UIScreen.main.bounds.height * 0.72,
+                         fill: LW.bg) {
             ControlPanel()
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
         }
-        .onAppear { model.refreshDevice() }
+        // Links pushed from the web: a card drops in over everything.
+        .overlay(alignment: .top) {
+            PushNoticeView(hub: model.push, topInset: model.device.safeArea.top)
+                .ignoresSafeArea()
+        }
+        .onAppear {
+            model.refreshDevice()
+            model.push.start()
+            #if DEBUG
+            let fonts = ["Geist-Regular", "Geist-Medium", "Geist-SemiBold", "GeistPixel-Square"].map { "\($0) \(UIFont(name: $0, size: 12) != nil ? "ok" : "MISSING")" }
+            debugLog("fonts: " + fonts.joined(separator: ", "))
+            #endif
+        }
         // Two-finger double-tap anywhere (prototype or lock screen) opens the options sheet.
-        .background(TwoFingerDoubleTap { if model.editingLink == nil { model.panelOpen = true } })
+        .background(TwoFingerDoubleTap { if model.editingLink == nil, !model.guideOpen { model.panelOpen = true } })
         .onReceive(NotificationCenter.default.publisher(for: .deviceDidShake)) { _ in
-            model.panelOpen = true
+            if !model.guideOpen { model.panelOpen = true }
         }
     }
 }

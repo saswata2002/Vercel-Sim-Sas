@@ -51,6 +51,10 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var launchFading = false
     private var snapshotPending = false
     @Published var panelOpen = false
+    /// The prototype menu's own height, so its floating sheet fits it exactly (no scrolling).
+    @Published var menuHeight: CGFloat = 0
+    /// The how-to guide (lock screen ⓘ; opens by itself on first launch).
+    @Published var guideOpen = false
     /// The saved link being edited (Link Directory ▸ Edit); the lock screen blurs behind its sheet.
     @Published var editingLink: SavedLink?
     @Published var switcher: Switcher?
@@ -64,6 +68,22 @@ final class AppModel: NSObject, ObservableObject {
     /// A load from the lock-screen widget that failed: shown in the widget.
     @Published var openFailure: String?
     private var readyTimeout: DispatchWorkItem?
+    /// Short fallback after a finished load whose page never sent its ready signal (a page
+    /// restored from the back-forward cache, or one whose scripts failed), so a cross-fade
+    /// can never hold a frozen screen.
+    private var readyFallback: DispatchWorkItem?
+    /// Back/forward history items that belong to the prototype open now. The swipe-back
+    /// gesture is only enabled while the previous item is one of them, so it can never land
+    /// on about:blank or on an earlier prototype.
+    private var sessionItems = Set<ObjectIdentifier>()
+    private var urlObservation: NSKeyValueObservation?
+    /// The last real page shown in this prototype (it may have navigated since it opened).
+    /// Used to restore it after the page's process dies and when going Home.
+    private var lastPageURL: URL?
+    /// The kind of the main-frame navigation WebKit is about to start.
+    private var pendingNavigationType: WKNavigationType = .other
+    /// Bumped on every fresh load, so a deferred load from an older open can't run late.
+    private var loadGeneration = 0
     /// A link waiting to go into the Link Directory: saved only once its page has really
     /// loaded, so typos, dead servers and error pages never become entries.
     private var pendingSave: URL?
@@ -76,6 +96,8 @@ final class AppModel: NSObject, ObservableObject {
     @Published var recents: [String] { didSet { defaults.set(recents, forKey: "recents") } }
     /// Every link submitted from the link field or the options sheet, saved automatically.
     let directory = LinkDirectory()
+    /// Rooms on the web push page (Vercel Sim Push) this iPhone listens to.
+    let push = PushHub(model: DeviceProfile.modelName)
     @Published var showStatusBar: Bool { didSet { defaults.set(showStatusBar, forKey: "showStatusBar") } }
     @Published var showHomeIndicator: Bool { didSet { defaults.set(showHomeIndicator, forKey: "showHomeIndicator") } }
     @Published var showIterationPill: Bool { didSet { defaults.set(showIterationPill, forKey: "showIterationPill") } }
@@ -115,6 +137,7 @@ final class AppModel: NSObject, ObservableObject {
         webView = FullBleedWebView(frame: .zero, configuration: config)
         super.init()
         readyBridge.model = self
+        push.app = self
 
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -140,6 +163,11 @@ final class AppModel: NSObject, ObservableObject {
             Task { @MainActor in self?.isLoading = wv.isLoading }
         }
         // The page's title names its directory entry, whenever it arrives or changes (SPAs set it late).
+        // Every URL change (loads and the page's own pushState) adds the current history item
+        // to this prototype's session and updates whether swipe-back is allowed.
+        urlObservation = webView.observe(\.url, options: [.new]) { [weak self] _, _ in
+            Task { @MainActor in self?.trackHistory() }
+        }
         titleObservation = webView.observe(\.title, options: [.new]) { [weak self] wv, _ in
             Task { @MainActor in
                 guard let self, let url = self.currentURL, let title = wv.title else { return }
@@ -185,14 +213,29 @@ final class AppModel: NSObject, ObservableObject {
     @discardableResult
     func open(_ raw: String, revealNow: Bool = false, save: Bool = true) -> Bool {
         debugLog("open(\(raw))")
+        // An invite to a web push room (its link pasted in a field, or shared in): join it.
+        if let invite = PushHub.invite(from: raw) {
+            panelOpen = false
+            push.join(invite)
+            return true
+        }
         guard let url = Self.normalize(raw) else { debugLog("  invalid URL"); return false }
+        // A second tap on the link that's already opening: let the first one finish.
+        if opening, currentURL?.absoluteString == url.absoluteString {
+            debugLog("  already opening; ignored")
+            return true
+        }
+        guideOpen = false
+        editingLink = nil
         loadError = nil
         openFailure = nil
         addRecent(url.absoluteString)
         pendingSave = save ? url : nil
         defaults.set(url.absoluteString, forKey: "lastURL")
         panelOpen = false
-        if let current = currentURL, Self.sameDocument(current, url), webView.url != nil, contentShown {
+        // Reuse the running page only for the very same URL: a link that differs in its query
+        // or #fragment (?v=2, #screen-3) is a different preview and loads as sent.
+        if let current = currentURL, current.absoluteString == url.absoluteString, webView.url != nil, contentShown {
             // Back from the lock screen: the prototype is still running (and already loaded).
             commitPendingSave()
             reveal()
@@ -201,6 +244,7 @@ final class AppModel: NSObject, ObservableObject {
         switcher = nil
         currentURL = url
         launchImage = nil
+        startSession()
         let saved = LaunchCache.image(for: url, size: webView.bounds.size)
         snapshotPending = saved == nil || lockVisible // refresh the snapshot on every fresh open
         if lockVisible, let saved {
@@ -226,6 +270,37 @@ final class AppModel: NSObject, ObservableObject {
         if revealNow { reveal() }
         debugLog("  opening \(url.absoluteString) (from lock: \(lockVisible), reveal now: \(revealNow))")
         return true
+    }
+
+    // MARK: history (swipe back / forward)
+
+    /// Back / forward within this prototype only (the same rule as the edge swipe).
+    var canGoBack: Bool { currentURL != nil && webView.canGoBack && webView.backForwardList.backItem.map { sessionItems.contains(ObjectIdentifier($0)) } == true }
+    var canGoForward: Bool { currentURL != nil && webView.canGoForward }
+    func goBack() { if canGoBack { webView.goBack() } }
+    func goForward() { if canGoForward { webView.goForward() } }
+
+    /// A fresh prototype starts its own history; earlier items stay unreachable by swipe.
+    private func startSession() {
+        sessionItems.removeAll()
+        lastPageURL = nil
+        webView.allowsBackForwardNavigationGestures = false
+    }
+
+    private func trackHistory() {
+        let list = webView.backForwardList
+        // Only once the item is the page on screen: while a new load is starting, `url` is
+        // already the new address but `currentItem` is still the previous page.
+        if currentURL != nil, let item = list.currentItem, item.url == webView.url,
+           ["http", "https"].contains(item.url.scheme?.lowercased() ?? "") {
+            sessionItems.insert(ObjectIdentifier(item))
+            lastPageURL = item.url
+        }
+        let canSwipe = currentURL != nil && list.backItem.map { sessionItems.contains(ObjectIdentifier($0)) } == true
+        if webView.allowsBackForwardNavigationGestures != canSwipe {
+            webView.allowsBackForwardNavigationGestures = canSwipe
+            debugLog("swipe-back \(canSwipe ? "on" : "off") (\(sessionItems.count) in session)")
+        }
     }
 
     /// The lock screen slides away and the prototype grows into place (see RootView).
@@ -269,6 +344,7 @@ final class AppModel: NSObject, ObservableObject {
     /// Called by the page's ready signal (Scripts.readySignal), or by the timeout.
     func pageBecameReady(_ why: String) {
         readyTimeout?.cancel()
+        readyFallback?.cancel()
         let sv = webView.scrollView
         let locked = abs(sv.zoomScale - device.zoom) < 0.005
         debugLog("page ready (\(why)); viewport locked: \(locked)")
@@ -314,6 +390,26 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
+    /// After `didFinish`: if no ready signal follows shortly, finish the reveal / cross-fade.
+    fileprivate func armReadyFallback() {
+        readyFallback?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.currentURL != nil else { return }
+            self.pageBecameReady("finished without a ready signal")
+        }
+        readyFallback = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: work)
+    }
+
+    /// A navigation that stopped without a new page (cancelled, a download, a swipe that
+    /// went nowhere): drop the cross-fade so the live page shows again.
+    fileprivate func navigationEnded() {
+        guard !webView.isLoading else { return }
+        readyTimeout?.cancel()
+        (webView as? FullBleedWebView)?.unfreeze()
+        if currentURL != nil, !contentShown, !opening { withAnimation(.easeOut(duration: 0.2)) { contentShown = true } }
+    }
+
     private func armReadyTimeout() {
         readyTimeout?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.pageBecameReady("timeout") }
@@ -335,6 +431,7 @@ final class AppModel: NSObject, ObservableObject {
         debugLog("loadFailed: \(message) (opening \(opening))")
         pendingSave = nil
         readyTimeout?.cancel()
+        readyFallback?.cancel()
         (webView as? FullBleedWebView)?.unfreeze()
         if opening {
             opening = false
@@ -350,6 +447,8 @@ final class AppModel: NSObject, ObservableObject {
     /// load begun before the web view is on screen (e.g. at cold launch) lays out at the
     /// 980-px desktop default with zero insets, so wait for a window and a real size.
     private func loadWhenOnScreen(_ url: URL) {
+        loadGeneration &+= 1
+        let generation = loadGeneration
         guard let wv = webView as? FullBleedWebView, wv.window == nil || wv.bounds.width < 1 else {
             (webView as? FullBleedWebView)?.refreshInsets()
             debugLog("  loading (on screen, width \(webView.bounds.width))")
@@ -361,10 +460,12 @@ final class AppModel: NSObject, ObservableObject {
         let go: () -> Void = { [weak self, weak wv] in
             guard !done else { return }
             done = true
+            // A newer open (or Home) has taken over since this load was deferred.
+            guard let self, self.loadGeneration == generation, self.currentURL != nil else { return }
             wv?.onReady = nil
             wv?.refreshInsets()
             debugLog("  loading now (window \(wv?.window != nil), width \(wv?.bounds.width ?? 0))")
-            self?.webView.load(URLRequest(url: url))
+            self.webView.load(URLRequest(url: url))
         }
         wv.onReady = go
         // Safety net: never leave a pasted link waiting.
@@ -402,13 +503,22 @@ final class AppModel: NSObject, ObservableObject {
     /// Close the prototype and go back to the lock screen.
     func goHome() {
         debugLog("goHome")
+        // Remember the page actually on screen (the prototype may have navigated, e.g. to
+        // another iteration), so swipe-up reopens that and not the link first opened.
+        if currentURL != nil, let page = lastPageURL ?? webView.url, ["http", "https"].contains(page.scheme?.lowercased() ?? "") {
+            addRecent(page.absoluteString)
+        }
         panelOpen = false
         switcher = nil
         loadError = nil
         currentURL = nil
         opening = false
         readyTimeout?.cancel()
+        readyFallback?.cancel()
+        loadGeneration &+= 1
         unmountWork?.cancel()
+        startSession()
+        (webView as? FullBleedWebView)?.unfreeze(animated: false)
         if !lockMounted {
             // Put it back above the screen first, then let it slide down into place.
             var t = Transaction(); t.disablesAnimations = true
@@ -427,11 +537,38 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
+    /// Back in the foreground. iOS may have killed the page's process while the app was
+    /// away (the screen would stay blank until a touch); ping it and reload straight away if
+    /// it's gone. Also lands any cross-fade that was waiting while the app was suspended.
+    func appBecameActive() {
+        guard let url = currentURL else { return }
+        webView.evaluateJavaScript("1") { [weak self] _, error in
+            Task { @MainActor in
+                guard let self, self.currentURL == url else { return }
+                if let error = error as? WKError, error.code == .webContentProcessTerminated {
+                    debugLog("foreground: page process was gone; reloading")
+                    self.reload()
+                } else if !self.webView.isLoading {
+                    self.navigationEnded()
+                }
+            }
+        }
+    }
+
     func reload() {
+        // "Try again" after a failed link retries that link. The web view may still hold the
+        // previous page (a failed load never commits), and reloading it would load the wrong one.
+        let retry = loadError != nil
         loadError = nil
         if contentShown { (webView as? FullBleedWebView)?.freeze() }
         armReadyTimeout()
-        if webView.url == nil || webView.url?.absoluteString == "about:blank", let url = currentURL {
+        if retry, let url = currentURL {
+            debugLog("retrying \(url.absoluteString)")
+            loadWhenOnScreen(url)
+            return
+        }
+        // After the page's process died WebKit forgets the page: load the one that was on screen.
+        if webView.url == nil || webView.url?.absoluteString == "about:blank", let url = lastPageURL ?? currentURL {
             loadWhenOnScreen(url)
         } else {
             webView.reload()
@@ -537,6 +674,35 @@ final class AppModel: NSObject, ObservableObject {
         return a.host == b.host && a.port == b.port && a.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == b.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
 
+    // MARK: links from other apps
+
+    /// A link handed to the app by iOS — `vercelsim://open?url=<encoded>` (the share sheet's
+    /// "Vercel Sim" and any shortcut), `vercelsim://my-app.vercel.app/path?q#f`, or a plain
+    /// https link. The prototype URL is used exactly as sent: path, query and #fragment kept.
+    func openIncoming(_ link: URL) {
+        debugLog("incoming link: \(link.absoluteString)")
+        if let invite = PushHub.invite(from: link.absoluteString) {   // vercelsim://pair?room=… (the web page's QR code)
+            editingLink = nil
+            panelOpen = false
+            push.join(invite)
+            return
+        }
+        guard let target = Self.prototypeURL(from: link) else { debugLog("  no prototype URL in it"); return }
+        editingLink = nil
+        open(target)
+    }
+
+    static func prototypeURL(from link: URL) -> String? {
+        guard link.scheme?.lowercased() == "vercelsim" else { return link.absoluteString }
+        if let q = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "url" })?.value, !q.isEmpty {
+            return q
+        }
+        var rest = String(link.absoluteString.dropFirst("vercelsim://".count))
+        if rest.hasPrefix("open/") { rest.removeFirst(5) }
+        if rest.isEmpty || rest == "open" { return nil }
+        return rest.range(of: #"^https?://"#, options: [.regularExpression, .caseInsensitive]) != nil ? rest : "https://" + rest
+    }
+
     // MARK: launch arguments (review / automation)
     // -url <url>        open a prototype straight away
     // -panel            show the control panel
@@ -615,10 +781,11 @@ final class FullBleedWebView: WKWebView {
             if let snap, self?.frozen === snap { self?.unfreeze() }
         }
     }
-    func unfreeze() {
+    func unfreeze(animated: Bool = true) {
         guard let snap = frozen else { return }
         frozen = nil
         debugLog("unfreeze (cross-fade end)")
+        guard animated else { snap.removeFromSuperview(); return }
         UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut, .beginFromCurrentState]) {
             snap.alpha = 0
         } completion: { _ in snap.removeFromSuperview() }
@@ -648,10 +815,15 @@ final class FullBleedWebView: WKWebView {
 
 extension AppModel: WKNavigationDelegate, WKUIDelegate {
     nonisolated func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        // WebKit's page process died (memory pressure, simulator hiccup): reload instead of a blank screen.
+        // WebKit's page process died (memory pressure, simulator hiccup): reload the page that
+        // was on screen instead of leaving a blank one.
         Task { @MainActor in
-            debugLog("web content process terminated; reloading")
-            self.reload()
+            guard let page = self.lastPageURL ?? self.currentURL else { return }
+            debugLog("web content process terminated; reloading \(page.absoluteString)")
+            self.loadError = nil
+            if self.contentShown { (webView as? FullBleedWebView)?.freeze() }
+            self.armReadyTimeout()
+            self.loadWhenOnScreen(page)
         }
     }
 
@@ -659,29 +831,69 @@ extension AppModel: WKNavigationDelegate, WKUIDelegate {
         Task { @MainActor in
             webView.scrollView.pinchGestureRecognizer?.isEnabled = false
             self.commitPendingSave() // in case the page never sends its ready signal
+            self.trackHistory()
+            self.armReadyFallback()
             self.pageDidLoad()
         }
     }
 
+    /// Cancelled loads (a newer tap, a swipe that went nowhere) and "frame load interrupted"
+    /// (downloads, files the page can't show) aren't failures: the current page stays.
+    nonisolated private static func isBenign(_ ns: NSError) -> Bool {
+        ns.code == NSURLErrorCancelled || (ns.domain == "WebKitErrorDomain" && (ns.code == 102 || ns.code == 204))
+    }
+
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        debugLog("didFail: \((error as NSError).code) \(error.localizedDescription)")
+        let ns = error as NSError
+        debugLog("didFail: \(ns.code) \(ns.localizedDescription)")
+        Task { @MainActor in
+            if Self.isBenign(ns) || self.contentShown { self.navigationEnded() } else { self.loadFailed(ns.localizedDescription) }
+        }
     }
 
     nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         let ns = error as NSError
         debugLog("didFailProvisional: \(ns.code) \(ns.localizedDescription)")
-        guard ns.code != NSURLErrorCancelled else { return }
-        Task { @MainActor in self.loadFailed(ns.localizedDescription) }
+        Task { @MainActor in
+            if Self.isBenign(ns) { self.navigationEnded() } else { self.loadFailed(ns.localizedDescription) }
+        }
+    }
+
+    /// Links the web view can't show (tel:, mailto:, sms:, App Store…) go to iOS, a
+    /// vercelsim:// link opens here, and the navigation type is noted for the cross-fade.
+    nonisolated func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                             decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
+        MainActor.assumeIsolated {
+            guard let url = navigationAction.request.url, let scheme = url.scheme?.lowercased() else { return decisionHandler(.allow) }
+            if scheme == "vercelsim" {
+                decisionHandler(.cancel)
+                self.openIncoming(url)
+                return
+            }
+            if !["http", "https", "about", "blob", "data", "file", "javascript"].contains(scheme) {
+                decisionHandler(.cancel)
+                debugLog("handing \(scheme): link to iOS")
+                UIApplication.shared.open(url)
+                return
+            }
+            if navigationAction.targetFrame?.isMainFrame ?? true { self.pendingNavigationType = navigationAction.navigationType }
+            decisionHandler(.allow)
+        }
     }
 
     /// A navigation the page started itself (iteration switch, link, location.href): hold the
     /// current screen and cross-fade when the new one is ready.
     nonisolated func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         Task { @MainActor in
+            let type = self.pendingNavigationType
+            self.pendingNavigationType = .other
             guard let url = webView.url ?? webView.backForwardList.currentItem?.url, url.scheme != "about",
                   self.contentShown, !self.lockVisible else { return }
-            (webView as? FullBleedWebView)?.freeze()
             self.armReadyTimeout()
+            // Back / forward (the edge swipe): WebKit draws its own transition from snapshots.
+            // Freezing here would capture the half-swiped screen and could hold it frozen.
+            guard type != .backForward else { return }
+            (webView as? FullBleedWebView)?.freeze()
         }
     }
 

@@ -13,7 +13,7 @@ struct PrototypeView: View {
             if model.isLoading, model.progress < 1 {
                 GeometryReader { geo in
                     Capsule()
-                        .fill(Color.accentColor)
+                        .fill(LW.ink)
                         .frame(width: geo.size.width * max(0.08, model.progress), height: 2.5)
                         .animation(.easeOut(duration: 0.25), value: model.progress)
                 }
@@ -74,18 +74,21 @@ struct LoadErrorView: View {
     let message: String
 
     var body: some View {
-        VStack(spacing: 10) {
-            Text("Can’t open this page").font(.title2.bold())
-            Text(message).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            HStack(spacing: 24) {
-                Button("Try again") { model.reload() }
-                Button("Home") { model.goHome() }
+        // The kit's end screen: icon tile, a Geist Pixel title, muted body, one primary action.
+        VStack(spacing: 0) {
+            LWIconTile(symbol: "wifi.exclamationmark", size: 48).padding(.bottom, 18)
+            Text("Can\u{2019}t open this page").font(LW.pixel(28)).foregroundStyle(LW.ink).multilineTextAlignment(.center)
+            Text(message).font(LW.body).foregroundStyle(LW.muted).multilineTextAlignment(.center)
+                .padding(.top, 8).frame(maxWidth: 300)
+            HStack(spacing: 10) {
+                Button("Home") { model.goHome() }.buttonStyle(LWButton(variant: .secondary, radius: LW.R.x2l, height: 48))
+                Button("Try again") { model.reload() }.buttonStyle(LWButton(variant: .primary, radius: LW.R.x2l, height: 48))
             }
-            .padding(.top, 8)
+            .padding(.top, 24)
         }
         .padding(32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(.systemBackground))
+        .background(LW.bg)
         .ignoresSafeArea()
     }
 }
@@ -103,20 +106,20 @@ struct IterationPill: View {
                         if item.index == switcher.items.first(where: { !$0.isOption })?.index { Divider().frame(width: 18).padding(.vertical, 1) }
                         Button { model.press(item) } label: {
                             Group {
-                                if item.isOption { Text(item.text).font(.system(size: 15, weight: .semibold)).monospacedDigit() }
-                                else { Image(systemName: item.symbol).font(.system(size: 14, weight: .semibold)) }
+                                if item.isOption { Text(item.text).font(LW.sans(15, .semibold)).monospacedDigit() }
+                                else { Image(systemName: item.symbol).font(.system(size: 14, weight: .medium)) }
                             }
                             .frame(width: 34, height: 34)
-                            .foregroundStyle(item.selected ? .white : .primary)
-                            .background(Circle().fill(item.selected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.thinMaterial)))
-                            .contentShape(Circle().inset(by: -5))
+                            .foregroundStyle(item.selected ? LW.onInk : LW.ink)
+                            .background(RoundedRectangle(cornerRadius: LW.R.chip, style: .continuous).fill(item.selected ? LW.ink : LW.wash(4)))
+                            .contentShape(Rectangle().inset(by: -5))
                         }
                         .buttonStyle(PressScale())
                     }
                 }
                 .padding(5)
-                .background(Capsule().fill(.ultraThinMaterial))
-                .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+                .lwSurface(radius: LW.R.control + 2)
+                .shadow(color: .black.opacity(0.10), radius: 5, y: 2)   // the kit's "pill" lift
                 .padding(.trailing, 6)
             }
             .frame(maxHeight: .infinity)
@@ -127,7 +130,7 @@ struct IterationPill: View {
 struct PressScale: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.9 : 1)
-            .animation(.spring(response: 0.2, dampingFraction: 0.7), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)          // Lightweight UI: 97% while held
+            .animation(LW.easeOut(160), value: configuration.isPressed)
     }
 }

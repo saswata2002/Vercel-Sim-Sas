@@ -1,15 +1,22 @@
 import SwiftUI
 import AVFoundation
 
-/// iOS-style lock screen: the user's wallpaper, the live date and time in the Figma
-/// typography ("📱 Lock Screen", Motion (Sas) 1526:74437), quick-action buttons and
-/// swipe up to open the prototype.
+/// The lock screen, in Lightweight UI's dark theme: the kit's canvas with the two cards (no
+/// date or time, at the user's request), and swipe up to open.
 struct LockScreenView: View {
     @EnvironmentObject private var model: AppModel
     @State private var drag: CGFloat = 0
+    /// True only while a finger is down. If the system cancels the swipe (a call, Control
+    /// Center, backgrounding) `onEnded` never runs; this resets anyway, so the lock screen
+    /// springs back instead of staying half-way up.
+    @GestureState private var swiping = false
     @FocusState private var linkFocused: Bool
     /// Follows `model.editingLink`, animated: the blur behind the Edit Link sheet.
     @State private var editBlur = false
+    /// The same blur behind the how-to guide.
+    @State private var guideBlur = false
+    /// The link the editor sheet shows (kept while the sheet animates away).
+    @State private var editorLink: SavedLink?
 
     var body: some View {
         GeometryReader { geo in
@@ -17,33 +24,15 @@ struct LockScreenView: View {
             let m = LockMetrics(size: geo.size, safe: model.device.safeArea) // published: follows the real inset once known
             ZStack(alignment: .top) {
               ZStack(alignment: .top) {
-                Wallpaper()
+                LWCanvas()
 
-                // Date and Time — Figma: stack starts 64.535 pt from the top; the time is
-                // pulled up 12.209 pt into the date's line box.
-                TimelineView(.everyMinute) { context in
-                    VStack(spacing: 0) {
-                        Text(LockClock.date(context.date))
-                            .font(.system(size: 19.186 * m.k, weight: .medium))      // SF Pro Medium (510)
-                            .tracking(-0.2267 * m.k)
-                            .frame(height: 24.419 * m.k)
-                            .padding(.bottom, -12.209 * m.k)
-                        Text(LockClock.time(context.date))
-                            .font(.system(size: 94.186 * m.k, weight: .semibold))    // SF Pro Semibold (590)
-                            .tracking(-1.439 * m.k)
-                    }
-                    .foregroundStyle(.white.opacity(0.8))
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, m.clockTop)
-                    .allowsHitTesting(false)
-                }
             }
             .frame(width: geo.size.width, height: height)
             .contentShape(Rectangle())
             .onTapGesture { linkFocused = false } // tap the wallpaper to put the keyboard away
             .gesture(
                 DragGesture(minimumDistance: 8)
+                    .updating($swiping) { _, s, _ in s = true }
                     .onChanged { drag = $0.translation.height }
                     .onEnded { value in
                         debugLog("lock drag ended \(value.translation.height) predicted \(value.predictedEndTranslation.height)")
@@ -66,10 +55,31 @@ struct LockScreenView: View {
                     // Saved links hug their rows, then fill the space below and scroll inside
                     // the card once they no longer fit (measured, so it holds on every screen).
                     LinkDirectoryWidget(directory: model.directory)
+                    // Links pushed from the web page.
+                    PushWidget(hub: model.push)
                     Spacer(minLength: 0)
+                    // How to use the app: a quiet pill at the foot of the screen.
+                    Button {
+                        linkFocused = false
+                        UISelectionFeedbackGenerator().selectionChanged()
+                        model.guideOpen = true
+                    } label: {
+                        HStack(spacing: 7) {
+                            Image(systemName: "info.circle").font(.system(size: 13, weight: .semibold))
+                            Text("Quick tour").font(LW.ui)
+                        }
+                        .foregroundStyle(LW.ink.opacity(0.9))
+                        .padding(.horizontal, 16)
+                        .frame(height: 38)
+                        .background(Capsule().fill(LW.card))
+                        .overlay(Capsule().strokeBorder(LW.line, lineWidth: 1))
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(LWPress())
+                    .accessibilityLabel("Quick tour of Vercel Sim")
                 }
                 .padding(.horizontal, m.margin)
-                .padding(.top, m.widgetsTop)
+                .padding(.top, m.clockTop)        // no clock: the cards start just under the status bar
                 .padding(.bottom, m.bottom)
                 .frame(width: geo.size.width, height: height)
               }
@@ -80,15 +90,35 @@ struct LockScreenView: View {
         }
         // Editing a saved link: a heavy blur over the whole lock screen. The sheet is its own
         // presentation above this, so it stays sharp.
-        .overlay { BackdropBlur(active: editBlur).allowsHitTesting(false) }
-        .ignoresSafeArea()
-        // Presented from here, outside the blurred layer, so the sheet itself stays sharp.
-        .sheet(item: $model.editingLink) { link in
-            LinkEditor(link: link) { name, url in model.directory.update(link, name: name, url: url) }
+        .onChange(of: swiping) { _, down in
+            guard !down, drag != 0 else { return }
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { drag = 0 }
         }
-        .onChange(of: model.editingLink != nil) { _, on in
-            debugLog("edit sheet \(on ? "up" : "down"): blur")
-            editBlur = on
+        .overlay { BackdropBlur(active: editBlur || guideBlur).allowsHitTesting(false) }
+        .environment(\.colorScheme, .dark)
+        .ignoresSafeArea()
+        // Floating sheets, above the blurred layer so they stay sharp. The editor keeps the
+        // link it opened with, so its content stays put while it slides away.
+        .lwFloatingSheet(isPresented: Binding(get: { model.editingLink != nil }, set: { if !$0 { model.editingLink = nil } }),
+                         height: 372, scrim: 0.2) {
+            if let link = editorLink {
+                LinkEditor(link: link) { name, url in model.directory.update(link, name: name, url: url) }
+                    .id(link.id)
+            }
+        }
+        .onChange(of: model.editingLink) { _, link in
+            if let link { editorLink = link }
+            debugLog("edit sheet \(link != nil ? "up" : "down"): blur")
+            editBlur = link != nil
+        }
+        // The guide: from ⓘ, and once on the very first launch.
+        .lwFloatingSheet(isPresented: $model.guideOpen, height: 452, scrim: 0.2) { FirstRunGuide() }
+        .onChange(of: model.guideOpen) { _, on in guideBlur = on }
+        .onAppear {
+            guard !UserDefaults.standard.bool(forKey: FirstRunGuide.seenKey), model.lockVisible else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                if model.lockVisible, !model.opening, model.currentURL == nil, model.editingLink == nil, !model.panelOpen { model.guideOpen = true }
+            }
         }
     }
 }
@@ -104,27 +134,24 @@ private struct LinkWidget: View {
     private var canSubmit: Bool { !link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
-                Text("Open a prototype").font(.system(size: 16, weight: .semibold))
+                Text("Open a prototype").font(LW.title).foregroundStyle(LW.ink)
                 Spacer()
                 if let failure = model.openFailure {
-                    Text(failure).font(.system(size: 12, weight: .medium)).foregroundStyle(Color(red: 1, green: 0.62, blue: 0.6))
-                        .lineLimit(1).transition(.opacity)
+                    Text(failure).font(LW.caption).foregroundStyle(LW.danger).lineLimit(1).transition(.opacity)
                 } else if invalid {
-                    Text("Not a valid link").font(.system(size: 12, weight: .medium)).foregroundStyle(Color(red: 1, green: 0.62, blue: 0.6))
-                        .transition(.opacity)
+                    Text("Not a valid link").font(LW.caption).foregroundStyle(LW.danger).transition(.opacity)
                 }
             }
-            .foregroundStyle(.white.opacity(0.85))
 
-            // One capsule: link field, clear, and the submit button inset at the end so
-            // the two share a centre line (48 pt field, 38 pt button, 5 pt inset all round).
-            HStack(spacing: 8) {
-                TextField("", text: $link, prompt: Text("Paste a Vercel link").foregroundStyle(.white.opacity(0.5)))
-                    .font(.system(size: 16))
-                    .foregroundStyle(.white)
-                    .tint(.white)
+            // The kit's input: 12 px corners, quiet border, ink on focus, danger when invalid;
+            // the submit button is a solid ink icon button inset at the end.
+            HStack(spacing: 4) {
+                TextField("", text: $link, prompt: Text("Paste a Vercel link").foregroundStyle(LW.muted))
+                    .font(LW.body)
+                    .foregroundStyle(LW.ink)
+                    .tint(LW.ink)
                     .keyboardType(.URL)
                     .textContentType(.URL)
                     .textInputAutocapitalization(.never)
@@ -132,47 +159,21 @@ private struct LinkWidget: View {
                     .submitLabel(.go)
                     .focused(focused)
                     .onSubmit(submit)
-                    .onChange(of: link) { withAnimation(.easeOut(duration: 0.15)) { invalid = false } }
+                    .onChange(of: link) { withAnimation(LW.easeOut) { invalid = false } }
                 if !link.isEmpty {
-                    Button { link = "" } label: {
-                        Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(.white.opacity(0.55))
-                            .frame(width: 28, height: 38)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Clear")
+                    LWIconButton(symbol: "xmark", look: .ghost, size: 28) { link = "" }
+                        .accessibilityLabel("Clear")
                 }
-                Button(action: submit) {
-                    ZStack {
-                        Image(systemName: "arrow.right")
-                            .font(.system(size: 15, weight: .bold))
-                            .opacity(model.opening ? 0 : 1)
-                            .scaleEffect(model.opening ? 0.5 : 1)
-                        if model.opening {
-                            ProgressView().controlSize(.small).tint(.black).transition(.opacity.combined(with: .scale(scale: 0.6)))
-                        }
-                    }
-                        .foregroundStyle(.black)
-                        .animation(.easeOut(duration: 0.18), value: model.opening)
-                        .frame(width: 38, height: 38)
-                        .background(Circle().fill(.white.opacity(canSubmit ? 1 : 0.45)))
-                        .contentShape(Circle().inset(by: -5)) // full-height touch target
-                }
-                .buttonStyle(PressScale())
-                .disabled(!canSubmit || model.opening)
-                .accessibilityLabel(model.opening ? "Opening prototype" : "Open prototype")
+                LWIconButton(symbol: "arrow.right", look: .solid, size: 36, busy: model.opening, action: submit)
+                    .disabled(!canSubmit || model.opening)
+                    .accessibilityLabel(model.opening ? "Opening prototype" : "Open prototype")
             }
-            .padding(.leading, 18)
-            .padding(.trailing, 5)
-            .frame(height: 48)
-            .background(Capsule().fill(.black.opacity(0.28)))
-            .overlay(Capsule().strokeBorder(invalid ? Color(red: 1, green: 0.45, blue: 0.42) : .white.opacity(focused.wrappedValue ? 0.45 : 0.18), lineWidth: 1))
+            .padding(.leading, 14)
+            .padding(.trailing, 6)
+            .lwField(focused: focused.wrappedValue, invalid: invalid)
         }
         .padding(16)
-        .background(RoundedRectangle(cornerRadius: 26, style: .continuous).fill(.ultraThinMaterial))
-        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(.white.opacity(0.22), lineWidth: 1))
-        .shadow(color: .black.opacity(0.18), radius: 18, y: 8)
-        .environment(\.colorScheme, .dark)
+        .lwSurface(radius: LW.R.sheet)
         .modifier(WidgetShake(animatableData: shake))
         .onChange(of: model.lockVisible) { _, visible in
             // Clear the field only once it has left the screen, so nothing changes mid-motion.
@@ -195,7 +196,7 @@ private struct LinkWidget: View {
 
     private func rejected() {
         UINotificationFeedbackGenerator().notificationOccurred(.error)
-        withAnimation(.easeOut(duration: 0.15)) { invalid = true }
+        withAnimation(LW.easeOut) { invalid = true }
         withAnimation(.linear(duration: 0.4)) { shake += 1 }
     }
 }
@@ -225,16 +226,24 @@ private struct WidgetShake: GeometryEffect {
     }
 }
 
-private struct Wallpaper: View {
+/// The kit's canvas: paper (`bg`) with a faint dot grid, as on the kit's own landing page.
+private struct LWCanvas: View {
     var body: some View {
-        // Sized by a clear backing + overlay so the image's intrinsic size can't push layout.
-        Color.black
+        LW.bg
             .overlay {
-                if let image = UIImage(named: "wallpaper.webp") ?? Bundle.main.path(forResource: "wallpaper", ofType: "webp").flatMap(UIImage.init(contentsOfFile:)) {
-                    Image(uiImage: image).resizable().scaledToFill()
+                Canvas { ctx, size in
+                    let step: CGFloat = 22, r: CGFloat = 1
+                    var y = step / 2
+                    while y < size.height {
+                        var x = step / 2
+                        while x < size.width {
+                            ctx.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: r * 2, height: r * 2)), with: .color(LW.wash(6)))
+                            x += step
+                        }
+                        y += step
+                    }
                 }
             }
-            .clipped()
             .allowsHitTesting(false)
     }
 }
@@ -318,7 +327,7 @@ struct LockMetrics {
         widgetsTop = clockTop + 139.465 * k
         margin = (22 * k).rounded()
         gap = (12 * k).rounded()
-        bottom = max(safe.bottom, 12) + 24
+        bottom = max(safe.bottom, 12) + 14  // clear of the home indicator
     }
 }
 
@@ -343,7 +352,7 @@ struct BackdropBlur: UIViewRepresentable {
         return v
     }
     func updateUIView(_ v: UIVisualEffectView, context: Context) {
-        let target: UIVisualEffect? = active ? UIBlurEffect(style: .systemThinMaterialDark) : nil
+        let target: UIVisualEffect? = active ? UIBlurEffect(style: .systemThinMaterial) : nil   // follows light / dark
         guard (v.effect == nil) != (target == nil) else { return }
         UIViewPropertyAnimator(duration: active ? 0.45 : 0.32, dampingRatio: 1) { v.effect = target }.startAnimation()
     }
