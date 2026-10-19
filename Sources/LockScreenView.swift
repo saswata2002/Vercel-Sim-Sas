@@ -15,8 +15,26 @@ struct LockScreenView: View {
     @State private var editBlur = false
     /// The same blur behind the how-to guide.
     @State private var guideBlur = false
+    @State private var joinBlur = false
+    /// Pasting a link: the link card comes forward on its own, everything else steps away.
+    @State private var pasteMode = false
+    /// The link card's resting bottom edge and the keyboard's top edge (screen points), so
+    /// in paste mode the card can sit just above the keyboard on any iPhone.
+    @State private var cardMaxY: CGFloat = 0
+    @State private var keyboardTop: CGFloat = UIScreen.main.bounds.height
+    /// How far the card travels down in paste mode: to `gap` above the keyboard.
+    private var pasteDrop: CGFloat {
+        guard cardMaxY > 0, keyboardTop < UIScreen.main.bounds.height else { return 28 }
+        return max(0, keyboardTop - 16 - cardMaxY)   // reads as the sheets' 10 pt gap
+    }
+    private static let pasteSpring = Animation.spring(response: 0.46, dampingFraction: 0.86)
     /// The link the editor sheet shows (kept while the sheet animates away).
     @State private var editorLink: SavedLink?
+
+    private func endPaste() {
+        linkFocused = false
+        withAnimation(Self.pasteSpring) { pasteMode = false }
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -51,12 +69,25 @@ struct LockScreenView: View {
                 // Lock-screen widget, below the clock like iOS widgets. Kept outside the
                 // swipe / press-and-hold gestures above so editing the link never triggers them.
                 VStack(spacing: m.gap) {
-                    LinkWidget(focused: $linkFocused)
+                    LinkWidget(focused: $linkFocused, pasteMode: pasteMode) { endPaste() }
+                        // Its resting position only: the frame includes the paste offset below, and
+                        // reading it while offset would chase its own movement.
+                        .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).maxY }) { if !pasteMode { cardMaxY = $0 } }
+                        // Comes down to sit just above the keyboard while pasting.
+                        .offset(y: pasteMode ? pasteDrop : 0)
+                        .zIndex(1)
                     // Saved links hug their rows, then fill the space below and scroll inside
                     // the card once they no longer fit (measured, so it holds on every screen).
-                    LinkDirectoryWidget(directory: model.directory)
-                    // Links pushed from the web page.
-                    PushWidget(hub: model.push)
+                    Group {
+                        LinkDirectoryWidget(directory: model.directory)
+                        // Links pushed from the web page.
+                        PushWidget(hub: model.push)
+                    }
+                    .opacity(pasteMode ? 0 : 1)
+                    .offset(y: pasteMode ? 40 : 0)
+                    .blur(radius: pasteMode ? 6 : 0)
+                    .allowsHitTesting(!pasteMode)
+                    .accessibilityHidden(pasteMode)
                     Spacer(minLength: 0)
                     // How to use the app: a quiet pill at the foot of the screen.
                     Button {
@@ -77,6 +108,8 @@ struct LockScreenView: View {
                     }
                     .buttonStyle(LWPress())
                     .accessibilityLabel("Quick tour of Vercel Sim")
+                    .opacity(pasteMode ? 0 : 1)
+                    .allowsHitTesting(!pasteMode)
                 }
                 .padding(.horizontal, m.margin)
                 .padding(.top, m.clockTop)        // no clock: the cards start just under the status bar
@@ -94,7 +127,7 @@ struct LockScreenView: View {
             guard !down, drag != 0 else { return }
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { drag = 0 }
         }
-        .overlay { BackdropBlur(active: editBlur || guideBlur).allowsHitTesting(false) }
+        .overlay { BackdropBlur(active: editBlur || guideBlur || joinBlur).allowsHitTesting(false) }
         .environment(\.colorScheme, .dark)
         .ignoresSafeArea()
         // Floating sheets, above the blurred layer so they stay sharp. The editor keeps the
@@ -111,14 +144,30 @@ struct LockScreenView: View {
             debugLog("edit sheet \(link != nil ? "up" : "down"): blur")
             editBlur = link != nil
         }
-        // The guide: from ⓘ, and once on the very first launch.
+        // The guide: only from the Quick tour button (it never opens by itself).
         .lwFloatingSheet(isPresented: $model.guideOpen, height: 452, scrim: 0.2) { FirstRunGuide() }
         .onChange(of: model.guideOpen) { _, on in guideBlur = on }
-        .onAppear {
-            guard !UserDefaults.standard.bool(forKey: FirstRunGuide.seenKey), model.lockVisible else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                if model.lockVisible, !model.opening, model.currentURL == nil, model.editingLink == nil, !model.panelOpen { model.guideOpen = true }
-            }
+        // Pushed from web ▸ Set up: join a room.
+        .lwFloatingSheet(isPresented: $model.pushJoinOpen, height: 520, scrim: 0.2, fit: true) { PushJoinSheet(hub: model.push) }
+        .onChange(of: model.pushJoinOpen) { _, on in joinBlur = on }
+        // Paste mode follows the field, and holds while a pasted link is opening.
+        .onChange(of: linkFocused) { _, on in
+            if on { withAnimation(Self.pasteSpring) { pasteMode = true } }
+            else if !model.opening { withAnimation(Self.pasteSpring) { pasteMode = false } }
+        }
+        .onChange(of: model.opening) { _, on in
+            if !on, !linkFocused { withAnimation(Self.pasteSpring) { pasteMode = false } }
+        }
+        .onChange(of: model.lockVisible) { _, visible in
+            if !visible { pasteMode = false }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
+            guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
+            let top = end.minY < UIScreen.main.bounds.height ? end.minY : UIScreen.main.bounds.height
+            withAnimation(Self.pasteSpring) { keyboardTop = top }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+            withAnimation(Self.pasteSpring) { keyboardTop = UIScreen.main.bounds.height }
         }
     }
 }
@@ -127,6 +176,8 @@ struct LockScreenView: View {
 private struct LinkWidget: View {
     @EnvironmentObject private var model: AppModel
     var focused: FocusState<Bool>.Binding
+    var pasteMode = false
+    var onBack: () -> Void = {}
     @State private var link = ""
     @State private var invalid = false
     @State private var shake: CGFloat = 0
@@ -136,6 +187,11 @@ private struct LinkWidget: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 8) {
+                if pasteMode {
+                    LWIconButton(symbol: "chevron.left", look: .soft, size: 30, action: onBack)
+                        .accessibilityLabel("Back")
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                }
                 Text("Open a prototype").font(LW.title).foregroundStyle(LW.ink)
                 Spacer()
                 if let failure = model.openFailure {

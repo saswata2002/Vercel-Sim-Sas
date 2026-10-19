@@ -110,9 +110,9 @@ struct RootView: View {
             #endif
         }
         // Two-finger double-tap anywhere (prototype or lock screen) opens the options sheet.
-        .background(TwoFingerDoubleTap { if model.editingLink == nil, !model.guideOpen { model.panelOpen = true } })
+        .background(TwoFingerDoubleTap { if model.editingLink == nil, !model.guideOpen, !model.pushJoinOpen { model.panelOpen = true } })
         .onReceive(NotificationCenter.default.publisher(for: .deviceDidShake)) { _ in
-            if !model.guideOpen { model.panelOpen = true }
+            if !model.guideOpen, !model.pushJoinOpen { model.panelOpen = true }
         }
     }
 }

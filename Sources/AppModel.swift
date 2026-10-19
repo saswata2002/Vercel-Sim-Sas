@@ -53,8 +53,10 @@ final class AppModel: NSObject, ObservableObject {
     @Published var panelOpen = false
     /// The prototype menu's own height, so its floating sheet fits it exactly (no scrolling).
     @Published var menuHeight: CGFloat = 0
-    /// The how-to guide (lock screen ⓘ; opens by itself on first launch).
+    /// The how-to guide, opened only from the lock screen's Quick tour button.
     @Published var guideOpen = false
+    /// The lock screen's "Join a room" sheet (Pushed from web ▸ Set up).
+    @Published var pushJoinOpen = false
     /// The saved link being edited (Link Directory ▸ Edit); the lock screen blurs behind its sheet.
     @Published var editingLink: SavedLink?
     @Published var switcher: Switcher?

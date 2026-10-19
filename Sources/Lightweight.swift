@@ -120,7 +120,10 @@ struct LWFloatingSheet<Sheet: View>: ViewModifier {
     var height: CGFloat
     var fill: Color = LW.card
     var scrim: Double = 0.4
+    /// Size to the content's own height (up to `height`) instead of filling `height`.
+    var fit = false
     @ViewBuilder let sheet: () -> Sheet
+    @State private var fitted: CGFloat = 0
     @State private var drag: CGFloat = 0
     /// True only while the top edge is held; resets even when the drag is cancelled.
     @GestureState private var holding = false
@@ -180,7 +183,10 @@ struct LWFloatingSheet<Sheet: View>: ViewModifier {
         let shape = RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
         return sheet()
             .environment(\.floatingDismiss, FloatingDismiss { close() })
+            .fixedSize(horizontal: false, vertical: fit)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { h in if fit { fitted = h } }
             .frame(maxWidth: .infinity)
+            .frame(height: fit && fitted > 0 ? min(fitted, height) : nil, alignment: .top)
             // No visible handle: the top edge still drags the sheet down to close.
             .overlay(alignment: .top) {
             Color.clear
@@ -200,7 +206,7 @@ struct LWFloatingSheet<Sheet: View>: ViewModifier {
                 )
                 .accessibilityHidden(true)
             }
-        .frame(maxHeight: height)                                // hugs its content up to `height`
+        .frame(maxHeight: fit ? nil : height)                    // hugs its content up to `height`
         .background(shape.fill(fill))
         .clipShape(shape)
         .overlay(shape.strokeBorder(LW.line, lineWidth: 1))
@@ -227,8 +233,8 @@ struct LWFloatingSheet<Sheet: View>: ViewModifier {
 
 extension View {
     func lwFloatingSheet<S: View>(isPresented: Binding<Bool>, height: CGFloat, fill: Color = LW.card, scrim: Double = 0.4,
-                                  @ViewBuilder content: @escaping () -> S) -> some View {
-        modifier(LWFloatingSheet(isPresented: isPresented, height: height, fill: fill, scrim: scrim, sheet: content))
+                                  fit: Bool = false, @ViewBuilder content: @escaping () -> S) -> some View {
+        modifier(LWFloatingSheet(isPresented: isPresented, height: height, fill: fill, scrim: scrim, fit: fit, sheet: content))
     }
 }
 

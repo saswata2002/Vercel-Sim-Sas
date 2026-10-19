@@ -154,6 +154,29 @@ final class PushHub: ObservableObject {
         return t.isEmpty ? model : String(t.prefix(40))
     }
 
+    /// The device shown under the name on the web ("iPhone 17 Pro", "Pixel 9"); this
+    /// phone's model unless edited.
+    @Published var deviceLabel: String = UserDefaults.standard.string(forKey: "pushDeviceLabel") ?? "" {
+        didSet {
+            let t = deviceLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+            defaults.set(t.isEmpty ? nil : t, forKey: "pushDeviceLabel")
+            helloSoon()
+        }
+    }
+    var shownModel: String {
+        let t = deviceLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? model : String(t.prefix(40))
+    }
+
+    /// The platform badge on the web: "iOS" or "Android".
+    static let platforms = ["iOS", "Android"]
+    @Published var platform: String = UserDefaults.standard.string(forKey: "pushPlatform") ?? "iOS" {
+        didSet {
+            defaults.set(platform, forKey: "pushPlatform")
+            helloSoon()
+        }
+    }
+
     // MARK: lifecycle
 
     /// The app is in the foreground: listen to every room and say hello.
@@ -399,7 +422,7 @@ final class PushHub: ObservableObject {
         if !force, let last = lastHello[secret], Date().timeIntervalSince(last) < 60 { return }
         lastHello[secret] = Date()
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
-        _ = send(PushEnvelope(t: "hello", at: Self.now, dev: deviceId, name: displayName, model: model, app: version, os: "iOS"), to: secret)
+        _ = send(PushEnvelope(t: "hello", at: Self.now, dev: deviceId, name: displayName, model: shownModel, app: version, os: platform), to: secret)
     }
 
     /// After the name is edited: one hello per room once typing stops.
@@ -420,12 +443,12 @@ final class PushHub: ObservableObject {
     private func register() {
         guard let url = Self.registryURL else { return }
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
-        let signature = "\(displayName)|\(version)"
+        let signature = "\(displayName)|\(shownModel)|\(platform)|\(version)"
         if defaults.string(forKey: "registrySignature") == signature,
            let last = defaults.object(forKey: "registeredAt") as? Date, Date().timeIntervalSince(last) < 6 * 3600 { return }
         if defaults.object(forKey: "installedAt") == nil { defaults.set(Date(), forKey: "installedAt") }
         let installed = (defaults.object(forKey: "installedAt") as? Date ?? Date()).timeIntervalSince1970 * 1000
-        let body: [String: Any] = ["id": deviceId, "name": displayName, "model": model, "os": "iOS", "app": version, "installedAt": installed.rounded()]
+        let body: [String: Any] = ["id": deviceId, "name": displayName, "model": shownModel, "os": platform, "app": version, "installedAt": installed.rounded()]
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")

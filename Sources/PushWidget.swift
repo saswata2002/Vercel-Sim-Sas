@@ -23,7 +23,7 @@ struct PushWidget: View {
                 empty(
                     symbol: "dot.radiowaves.left.and.right",
                     text: "Join a room to receive links pushed from your browser.",
-                    action: ("Set up", { model.panelOpen = true })
+                    action: ("Set up", { model.pushJoinOpen = true })
                 )
             } else if hub.received.isEmpty {
                 empty(symbol: "tray", text: "Links pushed from the web will appear here.", action: nil)
@@ -113,5 +113,153 @@ struct PushWidget: View {
         if s < 3600 { return "\(s / 60)m ago" }
         if s < 86_400 { return "\(s / 3600)h ago" }
         return "\(s / 86_400)d ago"
+    }
+}
+
+/// Joining a push room from the lock screen: the room's invite link, how this phone is
+/// named on the web, and one button.
+struct PushJoinSheet: View {
+    @ObservedObject var hub: PushHub
+    @Environment(\.floatingDismiss) private var dismiss
+    @State private var link = ""
+    @State private var name = ""
+    @State private var device = ""
+    @State private var platform = "iOS"
+    @State private var invalid = false
+    @FocusState private var field: Field?
+    private enum Field { case link, name, device }
+
+    private var invite: PushInvite? { PushHub.invite(from: link) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Header, as on the prototype menu's pages.
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Join a room").font(LW.sans(22, .semibold)).foregroundStyle(LW.ink)
+                Text("Links pushed to the room open on this phone.").font(LW.caption).foregroundStyle(LW.muted)
+            }
+            .padding(.horizontal, 6)
+            .padding(.bottom, 4)
+
+            // The room link: a pill like the menu's address bar.
+            HStack(spacing: 0) {
+                Image(systemName: "link").font(.system(size: 15, weight: .semibold)).foregroundStyle(LW.muted)
+                    .frame(width: 44)
+                TextField("", text: $link, prompt: Text("Room invite link").foregroundStyle(LW.muted))
+                    .font(LW.body).foregroundStyle(LW.ink)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .focused($field, equals: .link)
+                    .submitLabel(.next)
+                    .onSubmit { field = .name }
+                    .onChange(of: link) { invalid = false }
+                Button {
+                    if link.isEmpty { link = UIPasteboard.general.string ?? "" } else { link = "" }
+                } label: {
+                    Image(systemName: link.isEmpty ? "doc.on.clipboard" : "xmark")
+                        .font(.system(size: 15, weight: .semibold)).foregroundStyle(LW.ink)
+                        .contentTransition(.symbolEffect(.replace))
+                        .frame(width: 48, height: 52).contentShape(Rectangle())
+                }
+                .buttonStyle(LWPress())
+                .accessibilityLabel(link.isEmpty ? "Paste" : "Clear link")
+            }
+            .frame(height: 52)
+            .background(Capsule().fill(LW.card))
+            .overlay(Capsule().strokeBorder(invalid ? LW.danger : field == .link ? LW.ink.opacity(0.6) : LW.line, lineWidth: 1))
+            if invalid {
+                Text("That isn\u{2019}t a room link. Copy it from Vercel Sim Push.")
+                    .font(LW.caption).foregroundStyle(LW.danger).padding(.horizontal, 6)
+                    .transition(.opacity)
+            }
+
+            // About this phone: icon rows, like the menu's.
+            VStack(spacing: 0) {
+                fieldRow("person", prompt: "Your name", text: $name, focus: .name, next: .device)
+                fieldRow("iphone", prompt: hub.model, text: $device, focus: .device, next: nil)
+                HStack(spacing: 14) {
+                    Image(systemName: "square.stack.3d.up").font(.system(size: 18)).foregroundStyle(LW.ink).frame(width: 26)
+                    Text("Platform").font(LW.body).foregroundStyle(LW.ink)
+                    Spacer()
+                    HStack(spacing: 4) {
+                        ForEach(PushHub.platforms, id: \.self) { p in
+                            Button {
+                                UISelectionFeedbackGenerator().selectionChanged()
+                                withAnimation(LW.easeOut) { platform = p }
+                            } label: {
+                                Image(systemName: p == "iOS" ? "apple.logo" : "smartphone")
+                                    .font(.system(size: 16, weight: .medium))
+                                    .foregroundStyle(platform == p ? LW.ink : LW.muted)
+                                    .frame(width: 40, height: 40)
+                                    .background(Circle().fill(platform == p ? LW.wash(5) : .clear))
+                            }
+                            .buttonStyle(LWPress())
+                            .accessibilityLabel(p)
+                            .accessibilityAddTraits(platform == p ? .isSelected : [])
+                        }
+                    }
+                }
+                .padding(.horizontal, 6)
+                .frame(minHeight: 56)
+            }
+
+            Button("Join room", action: join)
+                .buttonStyle(LWButton(variant: .primary, radius: 26, height: 52, fill: true))
+                .disabled(link.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .animation(LW.easeOut, value: invalid)
+        .padding(LWFloatingSheet<EmptyView>.pad)
+        .padding(.top, 6)
+        .tint(LW.ink)
+        .environment(\.colorScheme, .dark)
+        .onAppear {
+            name = hub.deviceName == hub.model ? "" : hub.deviceName
+            device = hub.deviceLabel
+            platform = hub.platform
+            // A room link already on the clipboard fills in by itself.
+            if let clip = UIPasteboard.general.string, PushHub.invite(from: clip) != nil { link = clip }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { field = link.isEmpty ? .link : .name }
+        }
+    }
+
+    /// An icon row whose label is the field itself.
+    private func fieldRow(_ symbol: String, prompt: String, text: Binding<String>, focus: Field, next: Field?) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: symbol).font(.system(size: 18)).foregroundStyle(LW.ink).frame(width: 26)
+            TextField("", text: text, prompt: Text(prompt).foregroundStyle(LW.muted))
+                .font(LW.body).foregroundStyle(LW.ink)
+                .textInputAutocapitalization(.words)
+                .autocorrectionDisabled()
+                .focused($field, equals: focus)
+                .submitLabel(next == nil ? .join : .next)
+                .onSubmit { if let next { field = next } else { join() } }
+            if !text.wrappedValue.isEmpty, field == focus {
+                Button { text.wrappedValue = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(LW.muted)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear")
+            }
+        }
+        .padding(.horizontal, 6)
+        .frame(minHeight: 52)
+        .contentShape(Rectangle())
+        .onTapGesture { field = focus }
+    }
+
+    private func join() {
+        guard let invite else {
+            withAnimation(LW.easeOut) { invalid = true }
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+            return
+        }
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        hub.deviceName = n
+        hub.deviceLabel = device.trimmingCharacters(in: .whitespacesAndNewlines)
+        hub.platform = platform
+        hub.join(invite)
+        field = nil
+        dismiss()
     }
 }
