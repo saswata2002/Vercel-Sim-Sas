@@ -620,11 +620,20 @@ final class AppModel: NSObject, ObservableObject {
     func scanSwitcher() {
         guard currentURL != nil else { return }
         webView.evaluateJavaScript(Scripts.scanSwitcher) { [weak self] result, _ in
-            Task { @MainActor in self?.switcher = Self.parseSwitcher(result) }
+            Task { @MainActor in
+                guard let self else { return }
+                #if DEBUG
+                if self.fakeIterations > 0 { self.switcher = self.fakeSwitcher(); return }
+                #endif
+                self.switcher = Self.parseSwitcher(result)
+            }
         }
     }
 
     func press(_ item: Switcher.Item) {
+        #if DEBUG
+        if fakeIterations > 0 { fakeSelected = item.isOption ? item.index : 0; switcher = fakeSwitcher(); return }
+        #endif
         if item.isOption, var s = switcher {
             // Optimistic highlight; the rescan confirms it.
             for i in s.items.indices { s.items[i].selected = s.items[i].index == item.index }
@@ -649,7 +658,9 @@ final class AppModel: NSObject, ObservableObject {
                                  selected: item["selected"] as? Bool ?? false)
         }
         guard items.contains(where: \.isOption) else { return nil }
-        return Switcher(label: dict["label"] as? String ?? "", items: items)
+        // Only the iterations and reset: named controls such as "Spec Sheet" aren't offered
+        // in the phone app.
+        return Switcher(label: dict["label"] as? String ?? "", items: items.filter { $0.kind != .action })
     }
 
     // MARK: URL helpers
@@ -711,6 +722,15 @@ final class AppModel: NSObject, ObservableObject {
     // -iteration <n>    press iteration n once the page has loaded
     // -pill             show the on-screen iteration pill
     private var pendingIteration: Int?
+    #if DEBUG
+    private var fakeIterations = 0
+    private var fakeSelected = 4
+    private func fakeSwitcher() -> Switcher {
+        var items = (0..<fakeIterations).map { Switcher.Item(index: $0, kind: .option, text: "\($0 + 1)", selected: $0 == fakeSelected) }
+        items.append(Switcher.Item(index: fakeIterations, kind: .reset, text: "Reset", selected: false))
+        return Switcher(label: "Iterations", items: items)
+    }
+    #endif
     @Published private(set) var pillThisLaunch = false
     var pillVisible: Bool { showIterationPill || pillThisLaunch }
     private func handleLaunchArguments() {
@@ -721,6 +741,10 @@ final class AppModel: NSObject, ObservableObject {
         }
         // Testing flag: show the pill for this launch only, without saving the setting.
         if args.contains("-pill") { pillThisLaunch = true }
+        #if DEBUG
+        // Testing: -fakeIterations 12 shows a 12-iteration picker for any page.
+        if let n = value("-fakeIterations").flatMap(Int.init) { fakeIterations = n }
+        #endif
         if let n = value("-iteration").flatMap(Int.init) { pendingIteration = n }
         if let url = value("-url") { DispatchQueue.main.async { self.open(url) } }
         if args.contains("-panel") { DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.panelOpen = true } }

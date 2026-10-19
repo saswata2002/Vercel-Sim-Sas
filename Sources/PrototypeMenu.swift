@@ -1,130 +1,116 @@
 import SwiftUI
 import UIKit
 
-/// Options over a running prototype, laid out like a mobile browser's page menu: an address
-/// pill (back, forward, address, copy, reload), the prototype's iterations, four action
-/// tiles, and a short list of icon rows with inline controls. Everything fits
+/// Options over a running prototype, laid out like a mobile browser's page menu: the
+/// prototype's iterations, four action tiles, and a short list of icon rows. Everything fits
 /// without scrolling; Settings, Recents and Push open as pages inside the same sheet.
 struct PrototypeMenu: View {
     @EnvironmentObject private var model: AppModel
-    private enum Page { case main, settings, recents, push }
+    private enum Page: Hashable { case main, settings, recents, push }
     @State private var page = Page.main
-    @State private var editing = false
-    @State private var draft = ""
-    @State private var invalid = false
-    @State private var copied = false
-    @FocusState private var addressFocused: Bool
 
     private let pad = LWFloatingSheet<EmptyView>.pad
 
+    /// The push between pages: one spring for the slide and the sheet's height together.
+    private static let push = Animation.spring(response: 0.42, dampingFraction: 0.92)
+    /// Every page's height, measured off screen, so the sheet resizes during the slide
+    /// rather than after it.
+    @State private var heights: [Page: CGFloat] = [:]
+    /// True while going deeper (the new page comes from the right).
+    @State private var forward = true
+
     var body: some View {
         ZStack(alignment: .top) {
-            switch page {
-            case .main: main.transition(.asymmetric(insertion: .move(edge: .leading).combined(with: .opacity), removal: .opacity))
-            case .settings: settings.transition(.move(edge: .trailing).combined(with: .opacity))
-            case .recents: recents.transition(.move(edge: .trailing).combined(with: .opacity))
-            case .push: push.transition(.move(edge: .trailing).combined(with: .opacity))
-            }
+            // Like a navigation push: each page is opaque and the deeper one sits on top, so
+            // going in it slides over the menu (which drifts left and dims underneath), and
+            // going back it slides off to reveal the menu.
+            pageView(page)
+                .frame(maxWidth: .infinity, alignment: .top)
+                .background(LW.bg)
+                .id(page)
+                .zIndex(Double(Self.depth(page)))
+                .transition(.asymmetric(
+                    insertion: .modifier(active: PageSlide(x: forward ? 1 : -0.28, dim: forward ? 1 : 0.55),
+                                         identity: PageSlide(x: 0, dim: 1)),
+                    removal: .modifier(active: PageSlide(x: forward ? -0.28 : 1, dim: forward ? 0.55 : 1),
+                                       identity: PageSlide(x: 0, dim: 1))))
         }
-        .animation(.spring(response: 0.38, dampingFraction: 0.9), value: page)
-        .animation(.spring(response: 0.34, dampingFraction: 0.9), value: editing)
-        .fixedSize(horizontal: false, vertical: true)
-        // Report the height so the sheet is exactly this tall, following page changes.
-        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { h in
-            guard abs(h - model.menuHeight) > 0.5 else { return }
-            if model.menuHeight == 0 { model.menuHeight = h }
-            else { withAnimation(.spring(response: 0.38, dampingFraction: 0.9)) { model.menuHeight = h } }
+        .frame(maxWidth: .infinity, alignment: .top)
+        // Measure every page invisibly, at the sheet's width.
+        .background(alignment: .top) {
+            ZStack(alignment: .top) {
+                ForEach([Page.main, .settings, .recents, .push], id: \.self) { p in
+                    pageView(p)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { h in
+                            heights[p] = h
+                            if p == page { report(h, animated: model.menuHeight > 0) }
+                        }
+                }
+            }
+            .hidden()
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .clipped()
         .environment(\.colorScheme, .dark)
     }
 
+    private static func depth(_ p: Page) -> Int {
+        switch p { case .main: 0; case .settings, .recents: 1; case .push: 2 }
+    }
+
+    @ViewBuilder
+    private func pageView(_ p: Page) -> some View {
+        switch p {
+        case .main: main
+        case .settings: settings
+        case .recents: recents
+        case .push: push
+        }
+    }
+
+    /// Go to a page: set the direction first, so the outgoing page leaves the right way.
+    private func go(_ to: Page, back: Bool = false) {
+        guard to != page else { return }
+        forward = !back
+        UISelectionFeedbackGenerator().selectionChanged()
+        DispatchQueue.main.async {
+            withAnimation(Self.push) {
+                page = to
+                if let h = heights[to] { model.menuHeight = h }
+            }
+        }
+    }
+
+    private func report(_ h: CGFloat, animated: Bool) {
+        guard abs(h - model.menuHeight) > 0.5 else { return }
+        if animated { withAnimation(Self.push) { model.menuHeight = h } } else { model.menuHeight = h }
+    }
+
     // MARK: main page
 
     private var main: some View {
         VStack(alignment: .leading, spacing: 12) {
-            addressPill
-            if editing {
-                Text(invalid ? "That isn\u{2019}t a valid link." : "Paste or type a link, then Go.")
-                    .font(LW.caption).foregroundStyle(invalid ? LW.danger : LW.muted)
-                    .padding(.horizontal, 6)
-            } else {
-                if let switcher = model.switcher { iterations(switcher) }
-                tiles
-                VStack(spacing: 0) {
-                    checkRow("Status bar", symbol: "rectangle.topthird.inset.filled", isOn: $model.showStatusBar)
-                    checkRow("Haptics", symbol: "waveform", isOn: $model.hapticsOn)
-                    navRow("Settings", symbol: "gearshape") { page = .settings }
-                }
+            if let switcher = model.switcher { iterations(switcher) }
+            tiles
+            VStack(spacing: 0) {
+                checkRow("Status bar", symbol: "rectangle.topthird.inset.filled", isOn: $model.showStatusBar)
+                checkRow("Haptics", symbol: "waveform", isOn: $model.hapticsOn)
+                navRow("Settings", symbol: "gearshape") { go(.settings) }
             }
         }
         .padding(pad)
     }
 
-    /// Back · Forward · address · copy · reload, on one pill.
-    private var addressPill: some View {
-        HStack(spacing: 0) {
-            if editing {
-                Image(systemName: "link").font(.system(size: 14, weight: .medium)).foregroundStyle(LW.muted)
-                    .frame(width: 40)
-                TextField("", text: $draft, prompt: Text("Paste a Vercel link").foregroundStyle(LW.muted))
-                    .font(LW.body).foregroundStyle(LW.ink).tint(LW.ink)
-                    .keyboardType(.URL).textContentType(.URL)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .submitLabel(.go).focused($addressFocused)
-                    .onSubmit(go)
-                    .onChange(of: draft) { invalid = false }
-                pillIcon("xmark", label: "Cancel") { stopEditing() }
-                LWIconButton(symbol: "arrow.right", look: .solid, size: 36, action: go)
-                    .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
-                    .padding(.trailing, 6)
-                    .accessibilityLabel("Go")
-            } else {
-                pillIcon("chevron.left", label: "Back", enabled: model.canGoBack) { model.goBack(); model.panelOpen = false }
-                pillIcon("chevron.right", label: "Forward", enabled: model.canGoForward) { model.goForward(); model.panelOpen = false }
-                Button { startEditing() } label: {
-                    Text(model.currentURL.map { AppModel.display(($0).absoluteString) } ?? "")
-                        .font(LW.bodyMedium).foregroundStyle(LW.ink)
-                        .lineLimit(1).truncationMode(.middle)
-                        .frame(maxWidth: .infinity, minHeight: 52)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Address, \(model.currentURL.map { AppModel.display($0.absoluteString) } ?? ""). Edit")
-                pillIcon(copied ? "checkmark" : "link", label: "Copy link") { copyLink() }
-                pillIcon("arrow.clockwise", label: "Reload") { model.reload(); model.panelOpen = false }
-            }
-        }
-        .frame(height: 52)
-        .background(Capsule().fill(LW.card))
-        .overlay(Capsule().strokeBorder(editing && addressFocused ? LW.ink.opacity(0.6) : LW.line, lineWidth: 1))
-        .modifier(MenuShake(animatableData: invalid ? 1 : 0))
-    }
-
-    private func pillIcon(_ symbol: String, label: String, enabled: Bool = true, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(enabled ? LW.ink : LW.muted.opacity(0.45))
-                .contentTransition(.symbolEffect(.replace))
-                .frame(width: 44, height: 52)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(LWPress())
-        .disabled(!enabled)
-        .accessibilityLabel(label)
-    }
-
-    /// Home · Screenshot · Share · Recents.
+    /// Home · Share.
     private var tiles: some View {
         HStack(spacing: 3) {
             tile("Home", symbol: "house") { model.goHome() }
-            tile("Screenshot", symbol: "camera.viewfinder") { model.takeScreenshot() }
             tile("Share", symbol: "square.and.arrow.up") { share() }
-            tile("Recents", symbol: "clock.arrow.circlepath") { page = .recents }
         }
-        .clipShape(RoundedRectangle(cornerRadius: LW.R.tile, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous))
     }
 
     private func tile(_ title: String, symbol: String, action: @escaping () -> Void) -> some View {
@@ -141,33 +127,50 @@ struct PrototypeMenu: View {
     }
 
     /// The prototype's own picker: numbered iterations, then reset and named controls.
+    /// The prototype's own picker: a capsule tray of pill chips, concentric (tray radius =
+    /// chip radius + the 6 pt inset). The chips share the width when they fit. When there are
+    /// more, the numbers scroll (snapping chip by chip, feathered where more are hidden,
+    /// opened on the selected one) and reset stays pinned at the end.
     private func iterations(_ switcher: Switcher) -> some View {
-        VStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(switcher.items.filter { $0.kind != .action }) { item in
-                        Button { model.press(item) } label: {
-                            Group {
-                                if item.isOption { Text(item.text).font(LW.sans(16, .semibold)).monospacedDigit() }
-                                else { Image(systemName: item.symbol).font(.system(size: 15, weight: .medium)) }
-                            }
-                            .frame(width: 42, height: 42)
-                            .foregroundStyle(item.selected ? LW.onInk : LW.ink)
-                            .background(RoundedRectangle(cornerRadius: LW.R.xl, style: .continuous).fill(item.selected ? LW.ink : LW.wash(4)))
-                        }
-                        .buttonStyle(LWPress())
-                        .accessibilityLabel(item.isOption ? "Iteration \(item.text)" : item.text)
-                    }
-                }
-                .padding(10)
-            }
-            ForEach(switcher.items.filter { $0.kind == .action }) { item in
-                LWHairline(inset: 48)
-                navRow(item.text, symbol: item.symbol) { model.press(item); model.panelOpen = false }
+        let all = switcher.items.filter { $0.kind != .action }
+        let options = all.filter(\.isOption)
+        let extras = all.filter { !$0.isOption }
+        return ViewThatFits(in: .horizontal) {
+            chipRow(all, flexible: true)
+            HStack(spacing: 4) {
+                IterationScroller(items: options, selected: options.first(where: \.selected)?.id) { item in chip(item, flexible: false) }
+                ForEach(extras) { chip($0, flexible: false) }
             }
         }
-        .lwSurface(radius: LW.R.tile)
-        .clipShape(RoundedRectangle(cornerRadius: LW.R.tile, style: .continuous))
+        .padding(Self.trayInset)
+        .background(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous).fill(LW.card))
+        .clipShape(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous))
+    }
+
+    fileprivate static let trayInset: CGFloat = 6
+    fileprivate static let chipHeight: CGFloat = 44
+
+    private func chipRow(_ items: [Switcher.Item], flexible: Bool) -> some View {
+        HStack(spacing: 4) {
+            ForEach(items) { chip($0, flexible: flexible) }
+        }
+    }
+
+    private func chip(_ item: Switcher.Item, flexible: Bool) -> some View {
+        Button { model.press(item) } label: {
+            Group {
+                if item.isOption { Text(item.text).font(LW.sans(16, .semibold)).monospacedDigit() }
+                else { Image(systemName: item.symbol).font(.system(size: 15, weight: .semibold)) }
+            }
+            .foregroundStyle(item.selected ? LW.onInk : LW.ink)
+            .frame(minWidth: Self.chipHeight, maxWidth: flexible ? .infinity : Self.chipHeight)
+            .frame(height: Self.chipHeight)
+            .background(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.nested(Self.trayInset), style: .continuous).fill(item.selected ? LW.ink : LW.wash(3)))
+            .contentShape(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.nested(Self.trayInset), style: .continuous))
+        }
+        .buttonStyle(LWPress())
+        .accessibilityLabel(item.isOption ? "Iteration \(item.text)" : item.text)
+        .accessibilityAddTraits(item.selected ? .isSelected : [])
     }
 
     private func checkRow(_ title: String, symbol: String, isOn: Binding<Bool>) -> some View {
@@ -207,7 +210,7 @@ struct PrototypeMenu: View {
 
     private func pageHeader(_ title: String, _ subtitle: String) -> some View {
         HStack(alignment: .center, spacing: 6) {
-            Button { page = .main } label: {
+            Button { go(.main, back: true) } label: {
                 Image(systemName: "chevron.left").font(.system(size: 17, weight: .semibold)).foregroundStyle(LW.ink)
                     .frame(width: 36, height: 36).contentShape(Rectangle())
             }
@@ -228,18 +231,6 @@ struct PrototypeMenu: View {
             switchRow("Home indicator", symbol: "minus", isOn: $model.showHomeIndicator)
             switchRow("Scale 375 designs", symbol: "arrow.left.and.right.square", isOn: $model.fitBase)
             switchRow("Iteration pill on screen", symbol: "capsule.portrait", isOn: $model.showIterationPill)
-            navRow("Push from the web", symbol: "dot.radiowaves.left.and.right",
-                   detail: model.push.rooms.isEmpty ? "Off" : "\(model.push.rooms.count) room\(model.push.rooms.count == 1 ? "" : "s")") { page = .push }
-            HStack {
-                Spacer()
-                Button { model.clearWebsiteData(); model.panelOpen = false } label: {
-                    Text("Clear cookies & cache").font(LW.ui).foregroundStyle(LW.danger)
-                        .padding(.horizontal, 18).frame(height: 44)
-                        .background(Capsule().fill(LW.danger.opacity(0.14)))
-                }
-                .buttonStyle(LWPress())
-            }
-            .padding(.top, 12)
         }
         .padding(pad)
     }
@@ -286,7 +277,7 @@ struct PrototypeMenu: View {
     private var push: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Button { page = .settings } label: {
+                Button { go(.settings, back: true) } label: {
                     Image(systemName: "chevron.left").font(.system(size: 17, weight: .semibold)).foregroundStyle(LW.ink)
                         .frame(width: 36, height: 36).contentShape(Rectangle())
                 }
@@ -297,43 +288,13 @@ struct PrototypeMenu: View {
                 }
             }
             VStack(spacing: 0) { PushRoomRows(hub: model.push) }
-                .lwSurface(radius: LW.R.tile)
-                .clipShape(RoundedRectangle(cornerRadius: LW.R.tile, style: .continuous))
+                .lwSurface(radius: LWFloatingSheet<EmptyView>.innerRadius)
+                .clipShape(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous))
         }
         .padding(pad)
     }
 
     // MARK: actions
-
-    private func startEditing() {
-        draft = model.currentURL.map { AppModel.display($0.absoluteString) } ?? ""
-        editing = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { addressFocused = true }
-    }
-
-    private func stopEditing() {
-        debugLog("menu: stop editing")
-        addressFocused = false
-        invalid = false
-        editing = false
-    }
-
-    private func go() {
-        if model.open(draft) {
-            addressFocused = false
-        } else {
-            withAnimation(LW.easeOut) { invalid = true }
-            UINotificationFeedbackGenerator().notificationOccurred(.error)
-        }
-    }
-
-    private func copyLink() {
-        guard let url = model.webView.url ?? model.currentURL else { return }
-        UIPasteboard.general.string = url.absoluteString
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        copied = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { copied = false }
-    }
 
     private func share() {
         guard let url = model.webView.url ?? model.currentURL else { return }
@@ -372,9 +333,62 @@ private struct MenuTilePress: ButtonStyle {
     }
 }
 
-private struct MenuShake: GeometryEffect {
-    var animatableData: CGFloat
-    func effectValue(size: CGSize) -> ProjectionTransform {
-        ProjectionTransform(CGAffineTransform(translationX: 8 * sin(animatableData * .pi * 4), y: 0))
+/// The numbered chips when they don't all fit: a snapping horizontal scroll that opens on the
+/// selected chip and fades at whichever edge has more hidden.
+private struct IterationScroller<Chip: View>: View {
+    let items: [Switcher.Item]
+    let selected: Int?
+    @ViewBuilder let chip: (Switcher.Item) -> Chip
+    @State private var offset: CGFloat = 0
+    @State private var content: CGFloat = 0
+    @State private var viewport: CGFloat = 0
+    private let feather: CGFloat = 22
+
+    private var leading: CGFloat { min(max(offset / 16, 0), 1) }
+    private var trailing: CGFloat { min(max((content - viewport - offset) / 16, 0), 1) }
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(items) { chip($0).id($0.id) }
+                }
+                .scrollTargetLayout()
+                // The row's frame in the scroller's space: its x is minus the scroll offset.
+                .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("iterScroll")) }) { r in
+                    offset = -r.minX; content = r.width
+                }
+            }
+            .coordinateSpace(.named("iterScroll"))
+            .scrollTargetBehavior(.viewAligned)
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { viewport = $0 }
+            .mask {
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [.black.opacity(1 - leading), .black], startPoint: .leading, endPoint: .trailing).frame(width: feather)
+                    Rectangle()
+                    LinearGradient(colors: [.black, .black.opacity(1 - trailing)], startPoint: .leading, endPoint: .trailing).frame(width: feather)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.nested(6), style: .continuous))
+            .onAppear {
+                guard let selected else { return }
+                DispatchQueue.main.async { proxy.scrollTo(selected, anchor: .center) }
+            }
+            .onChange(of: selected) { _, id in
+                guard let id else { return }
+                withAnimation(LW.easeOut(300)) { proxy.scrollTo(id, anchor: .center) }
+            }
+        }
+    }
+}
+
+/// A page sliding during the push: `x` is a fraction of the width; `dim` is its opacity.
+private struct PageSlide: ViewModifier {
+    let x: CGFloat
+    let dim: Double
+    func body(content: Content) -> some View {
+        content
+            .opacity(dim)
+            .visualEffect { v, proxy in v.offset(x: x * proxy.size.width) }
     }
 }

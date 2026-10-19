@@ -458,8 +458,8 @@ struct LinkEditor: View {
 
             // Dialog footer: pills, concentric with the card's bottom corners; one primary.
             HStack(spacing: 10) {
-                Button("Cancel") { dismiss() }.buttonStyle(LWButton(variant: .secondary, radius: 24, height: 48, fill: true))
-                Button("Save") { commit() }.buttonStyle(LWButton(variant: .primary, radius: 24, height: 48, fill: true)).disabled(parsed == nil)
+                Button("Cancel") { dismiss() }.buttonStyle(LWButton(variant: .secondary, radius: LWFloatingSheet<EmptyView>.innerRadius, height: 48, fill: true))
+                Button("Save") { commit() }.buttonStyle(LWButton(variant: .primary, radius: LWFloatingSheet<EmptyView>.innerRadius, height: 48, fill: true)).disabled(parsed == nil)
             }
             .padding(.top, 4)
         }

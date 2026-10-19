@@ -101,7 +101,7 @@ struct FirstRunGuide: View {
                 finish()
             }
             // A pill, concentric with the card's bottom corners at the same 16 pt margin.
-            .buttonStyle(LWButton(variant: .primary, radius: 26, height: 52, fill: true))
+            .buttonStyle(LWButton(variant: .primary, radius: LWFloatingSheet<EmptyView>.innerRadius, height: 52, fill: true))
             .padding(.horizontal, LWFloatingSheet<EmptyView>.pad)
             .padding(.bottom, LWFloatingSheet<EmptyView>.pad)
         }

@@ -137,12 +137,15 @@ struct LWFloatingSheet<Sheet: View>: ViewModifier {
     @State private var keyboardTop: CGFloat = UIScreen.main.bounds.height
 
     static var inset: CGFloat { 10 }
-    /// Concentric with the display's own corners (62 pt on iPhone 17 → 52), never under 28.
-    static var radius: CGFloat { max(DisplayCorner.radius - inset, 28) }
+    /// The sheet's corner radius: 32 pt on every iPhone (decreased from the display-concentric
+    /// ~52 pt at the user's request).
+    static var radius: CGFloat { 32 }
     /// The margin inside the card, on every side, for anything with corners.
     static var pad: CGFloat { 16 }
     /// Corner radius for a shape `pad` in from the card's corner, so the two stay concentric.
     static var innerRadius: CGFloat { radius - pad }
+    /// For an element `inset` inside an inner block (chips in a tray, a thumb in a segment).
+    static func nested(_ inset: CGFloat) -> CGFloat { max(innerRadius - inset, 6) }
 
     func body(content: Content) -> some View {
         content.overlay {

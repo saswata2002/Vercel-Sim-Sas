@@ -17,15 +17,31 @@ struct PushWidget: View {
     }
 
     private func card(rows: Int) -> some View {
+        Group {
+            if hub.rooms.isEmpty { joinCTA } else { roomCard(rows: rows) }
+        }
+    }
+
+    /// No room yet: just the call to action, a full-width pill that opens Join a room.
+    private var joinCTA: some View {
+        Button { UISelectionFeedbackGenerator().selectionChanged(); model.pushJoinOpen = true } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "plus").font(.system(size: 14, weight: .bold))
+                Text("Join a room").font(LW.ui)
+            }
+            .foregroundStyle(LW.onInk)
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background(Capsule().fill(LW.ink))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(LWPress())
+        .accessibilityLabel("Join a room to get links pushed from your browser")
+    }
+
+    private func roomCard(rows: Int) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            if hub.rooms.isEmpty {
-                empty(
-                    symbol: "dot.radiowaves.left.and.right",
-                    text: "Join a room to receive links pushed from your browser.",
-                    action: ("Set up", { model.pushJoinOpen = true })
-                )
-            } else if hub.received.isEmpty {
+            if hub.received.isEmpty {
                 empty(symbol: "tray", text: "Links pushed from the web will appear here.", action: nil)
             } else if rows > 0 {
                 VStack(spacing: 0) {
@@ -128,85 +144,123 @@ struct PushJoinSheet: View {
     @State private var invalid = false
     @FocusState private var field: Field?
     private enum Field { case link, name, device }
+    @Namespace private var platformNS
 
     private var invite: PushInvite? { PushHub.invite(from: link) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            // Header, as on the prototype menu's pages.
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Join a room").font(LW.sans(22, .semibold)).foregroundStyle(LW.ink)
-                Text("Links pushed to the room open on this phone.").font(LW.caption).foregroundStyle(LW.muted)
-            }
-            .padding(.horizontal, 6)
-            .padding(.bottom, 4)
-
-            // The room link: a pill like the menu's address bar.
-            HStack(spacing: 0) {
-                Image(systemName: "link").font(.system(size: 15, weight: .semibold)).foregroundStyle(LW.muted)
-                    .frame(width: 44)
-                TextField("", text: $link, prompt: Text("Room invite link").foregroundStyle(LW.muted))
-                    .font(LW.body).foregroundStyle(LW.ink)
-                    .keyboardType(.URL)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .focused($field, equals: .link)
-                    .submitLabel(.next)
-                    .onSubmit { field = .name }
-                    .onChange(of: link) { invalid = false }
-                Button {
-                    if link.isEmpty { link = UIPasteboard.general.string ?? "" } else { link = "" }
-                } label: {
-                    Image(systemName: link.isEmpty ? "doc.on.clipboard" : "xmark")
-                        .font(.system(size: 15, weight: .semibold)).foregroundStyle(LW.ink)
-                        .contentTransition(.symbolEffect(.replace))
-                        .frame(width: 48, height: 52).contentShape(Rectangle())
+        VStack(alignment: .leading, spacing: 16) {
+            // Header: what this is, in one glance.
+            HStack(spacing: 12) {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 17, weight: .semibold)).foregroundStyle(LW.ink)
+                    .frame(width: 44, height: 44)
+                    .background(RoundedRectangle(cornerRadius: LW.R.control, style: .continuous).fill(LW.wash(4)))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Join a room").font(LW.sans(20, .semibold)).foregroundStyle(LW.ink)
+                    Text("Links pushed to the room open on this phone.")
+                        .font(LW.sans(13)).foregroundStyle(LW.muted).lineLimit(1).minimumScaleFactor(0.85)
                 }
-                .buttonStyle(LWPress())
-                .accessibilityLabel(link.isEmpty ? "Paste" : "Clear link")
-            }
-            .frame(height: 52)
-            .background(Capsule().fill(LW.card))
-            .overlay(Capsule().strokeBorder(invalid ? LW.danger : field == .link ? LW.ink.opacity(0.6) : LW.line, lineWidth: 1))
-            if invalid {
-                Text("That isn\u{2019}t a room link. Copy it from Vercel Sim Push.")
-                    .font(LW.caption).foregroundStyle(LW.danger).padding(.horizontal, 6)
-                    .transition(.opacity)
+                Spacer(minLength: 0)
             }
 
-            // About this phone: icon rows, like the menu's.
+            // One grouped card: the link, then how this phone appears on the web.
             VStack(spacing: 0) {
-                fieldRow("person", prompt: "Your name", text: $name, focus: .name, next: .device)
-                fieldRow("iphone", prompt: hub.model, text: $device, focus: .device, next: nil)
-                HStack(spacing: 14) {
-                    Image(systemName: "square.stack.3d.up").font(.system(size: 18)).foregroundStyle(LW.ink).frame(width: 26)
-                    Text("Platform").font(LW.body).foregroundStyle(LW.ink)
-                    Spacer()
-                    HStack(spacing: 4) {
-                        ForEach(PushHub.platforms, id: \.self) { p in
-                            Button {
-                                UISelectionFeedbackGenerator().selectionChanged()
-                                withAnimation(LW.easeOut) { platform = p }
-                            } label: {
-                                Image(systemName: p == "iOS" ? "apple.logo" : "smartphone")
-                                    .font(.system(size: 16, weight: .medium))
-                                    .foregroundStyle(platform == p ? LW.ink : LW.muted)
-                                    .frame(width: 40, height: 40)
-                                    .background(Circle().fill(platform == p ? LW.wash(5) : .clear))
-                            }
+                groupRow("link", focused: field == .link, invalid: invalid) {
+                    TextField("", text: $link, prompt: Text("Paste the room link").foregroundStyle(LW.muted))
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .focused($field, equals: .link)
+                        .submitLabel(.next)
+                        .onSubmit { field = .name }
+                        .onChange(of: link) { invalid = false }
+                    if link.isEmpty {
+                        Button("Paste") { link = UIPasteboard.general.string ?? "" }
+                            .font(LW.label).foregroundStyle(LW.ink)
+                            .padding(.horizontal, 12).frame(height: 30)
+                            .background(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.nested(13), style: .continuous).fill(LW.wash(5)))
                             .buttonStyle(LWPress())
-                            .accessibilityLabel(p)
-                            .accessibilityAddTraits(platform == p ? .isSelected : [])
-                        }
+                    } else {
+                        clearButton { link = "" }
                     }
                 }
-                .padding(.horizontal, 6)
-                .frame(minHeight: 56)
+                LWHairline(inset: 58)
+                groupRow("person", focused: field == .name) {
+                    TextField("", text: $name, prompt: Text("Your name").foregroundStyle(LW.muted))
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled()
+                        .focused($field, equals: .name)
+                        .submitLabel(.next)
+                        .onSubmit { field = .device }
+                    if !name.isEmpty, field == .name { clearButton { name = "" } }
+                }
+                LWHairline(inset: 58)
+                groupRow(platform == "iOS" ? "iphone" : "smartphone", focused: field == .device) {
+                    TextField("", text: $device, prompt: Text(hub.model).foregroundStyle(LW.muted))
+                        .textInputAutocapitalization(.words)
+                        .autocorrectionDisabled()
+                        .focused($field, equals: .device)
+                        .submitLabel(.join)
+                        .onSubmit(join)
+                    if !device.isEmpty, field == .device { clearButton { device = "" } }
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous).fill(LW.card))
+            .overlay(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous)
+                .strokeBorder(invalid ? LW.danger.opacity(0.7) : LW.line, lineWidth: 1))
+
+            if invalid {
+                Label("That isn\u{2019}t a room link. Copy it from Vercel Sim Push.", systemImage: "exclamationmark.circle")
+                    .font(LW.caption).foregroundStyle(LW.danger)
+                    .padding(.horizontal, 4).padding(.top, -6)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
-            Button("Join room", action: join)
-                .buttonStyle(LWButton(variant: .primary, radius: 26, height: 52, fill: true))
-                .disabled(link.trimmingCharacters(in: .whitespaces).isEmpty)
+            // Platform: a labelled segmented control.
+            HStack(spacing: 4) {
+                ForEach(PushHub.platforms, id: \.self) { p in
+                    Button {
+                        UISelectionFeedbackGenerator().selectionChanged()
+                        withAnimation(LW.easeOut(240)) { platform = p }
+                    } label: {
+                        HStack(spacing: 7) {
+                            Image(systemName: p == "iOS" ? "apple.logo" : "smartphone").font(.system(size: 14, weight: .semibold))
+                            Text(p).font(LW.ui)
+                        }
+                        .foregroundStyle(platform == p ? LW.ink : LW.muted)
+                        .frame(maxWidth: .infinity, minHeight: 40)
+                        .background {
+                            if platform == p {
+                                RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.nested(4), style: .continuous).fill(LW.raised).matchedGeometryEffect(id: "platform", in: platformNS)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(platform == p ? .isSelected : [])
+                }
+            }
+            .padding(4)
+            .background(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous).fill(LW.card))
+            .overlay(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous).strokeBorder(LW.line, lineWidth: 1))
+
+            // The one action: ink when ready, a quiet outline until there's a link.
+            let ready = !link.trimmingCharacters(in: .whitespaces).isEmpty
+            Button(action: join) {
+                HStack(spacing: 8) {
+                    Text("Join room").font(LW.ui)
+                    Image(systemName: "arrow.right").font(.system(size: 13, weight: .bold))
+                }
+                .foregroundStyle(ready ? LW.onInk : LW.muted)
+                .frame(maxWidth: .infinity, minHeight: 52)
+                .background(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous).fill(ready ? LW.ink : LW.wash(3)))
+                .overlay(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous).strokeBorder(ready ? .clear : LW.line, lineWidth: 1))
+                .contentShape(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous))
+            }
+            .buttonStyle(LWPress())
+            .disabled(!ready)
+            .animation(LW.easeOut, value: ready)
         }
         .animation(LW.easeOut, value: invalid)
         .padding(LWFloatingSheet<EmptyView>.pad)
@@ -223,29 +277,29 @@ struct PushJoinSheet: View {
         }
     }
 
-    /// An icon row whose label is the field itself.
-    private func fieldRow(_ symbol: String, prompt: String, text: Binding<String>, focus: Field, next: Field?) -> some View {
-        HStack(spacing: 14) {
-            Image(systemName: symbol).font(.system(size: 18)).foregroundStyle(LW.ink).frame(width: 26)
-            TextField("", text: text, prompt: Text(prompt).foregroundStyle(LW.muted))
+    /// A row of the grouped card: an icon tile that lights up while its field is active.
+    private func groupRow<Content: View>(_ symbol: String, focused: Bool, invalid: Bool = false, @ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(invalid ? LW.danger : focused ? LW.ink : LW.muted)
+                .frame(width: 32, height: 32)
+                .background(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.nested(12), style: .continuous).fill(focused ? LW.wash(5) : LW.wash(3)))
+                .animation(LW.easeOut, value: focused)
+            HStack(spacing: 6) { content() }
                 .font(LW.body).foregroundStyle(LW.ink)
-                .textInputAutocapitalization(.words)
-                .autocorrectionDisabled()
-                .focused($field, equals: focus)
-                .submitLabel(next == nil ? .join : .next)
-                .onSubmit { if let next { field = next } else { join() } }
-            if !text.wrappedValue.isEmpty, field == focus {
-                Button { text.wrappedValue = "" } label: {
-                    Image(systemName: "xmark.circle.fill").font(.system(size: 16)).foregroundStyle(LW.muted)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Clear")
-            }
         }
-        .padding(.horizontal, 6)
-        .frame(minHeight: 52)
+        .padding(.leading, 14).padding(.trailing, 12)
+        .frame(minHeight: 56)
         .contentShape(Rectangle())
-        .onTapGesture { field = focus }
+    }
+
+    private func clearButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "xmark.circle.fill").font(.system(size: 17)).foregroundStyle(LW.muted)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Clear")
     }
 
     private func join() {

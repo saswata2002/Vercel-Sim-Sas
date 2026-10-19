@@ -26,7 +26,7 @@ struct ControlPanel: View {
                 Text("Options").font(LW.title).foregroundStyle(LW.ink)
                 Spacer()
                 Button("Done") { model.panelOpen = false }
-                    .buttonStyle(LWButton(variant: .secondary, radius: 18, height: 36))
+                    .buttonStyle(LWButton(variant: .secondary, radius: LWFloatingSheet<EmptyView>.nested(6), height: 36))
             }
             // Done sits at the card's 16 pt margin, a pill concentric with its top corner.
             .padding(.leading, 20)
@@ -171,8 +171,8 @@ struct ControlPanel: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(LW.label).foregroundStyle(LW.muted).padding(.leading, 4)
             VStack(spacing: 0) { content() }
-                .lwSurface(radius: LW.R.tile)
-                .clipShape(RoundedRectangle(cornerRadius: LW.R.tile, style: .continuous))
+                .lwSurface(radius: LWFloatingSheet<EmptyView>.innerRadius)
+                .clipShape(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous))
             if let footer {
                 Text(footer).font(LW.caption).foregroundStyle(footerIsError ? LW.danger : LW.muted).padding(.horizontal, 4)
             }
@@ -240,11 +240,6 @@ struct ControlPanel: View {
                     }
                 }
                 .padding(12)
-            }
-            // Named actions get a labelled row too, so "Spec Sheet" is findable.
-            ForEach(switcher.items.filter { $0.kind == .action }) { item in
-                LWHairline()
-                row(item.text, symbol: item.symbol) { model.press(item); model.panelOpen = false }
             }
         }
     }
