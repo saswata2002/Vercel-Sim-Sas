@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Open in Vercel Sim",
+  "description": "Opens vercel.app links in Vercel Sim, with the full link (path, query and #fragment).",
+  "version": "1.0",
+  "icons": { "48": "icon-48.png", "96": "icon-96.png", "128": "icon-128.png", "256": "icon-256.png", "512": "icon-512.png" },
+  "content_scripts": [
+    {
+      "js": ["content.js"],
+      "matches": ["*://*.vercel.app/*"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		AA00000000000000000190 /* VercelSimShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AA00000000000000000130 /* VercelSimShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		AA00000000000000000290 /* VercelSimSafari.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AA00000000000000000230 /* VercelSimSafari.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -17,6 +18,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = AA00000000000000000140;
 			remoteInfo = VercelSimShare;
+		};
+		AA00000000000000000291 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA00000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA00000000000000000240;
+			remoteInfo = VercelSimSafari;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -28,6 +36,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				AA00000000000000000190 /* VercelSimShare.appex in Embed Foundation Extensions */,
+				AA00000000000000000290 /* VercelSimSafari.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -38,6 +47,8 @@
 		AA00000000000000000012 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AA00000000000000000030 /* VercelSim.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VercelSim.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000112 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AA00000000000000000212 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		AA00000000000000000230 /* VercelSimSafari.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VercelSimSafari.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA00000000000000000130 /* VercelSimShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = VercelSimShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -50,6 +61,16 @@
 		AA00000000000000000110 /* Sources */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = Sources;
+			sourceTree = "<group>";
+		};
+		AA00000000000000000210 /* Sources */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		AA00000000000000000213 /* Resources */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Resources;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -69,6 +90,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA00000000000000000220 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -78,6 +106,7 @@
 				AA00000000000000000010 /* Sources */,
 				AA00000000000000000011 /* Support */,
 				AA00000000000000000111 /* ShareExtension */,
+				AA00000000000000000211 /* SafariExtension */,
 				AA00000000000000000002 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -87,6 +116,7 @@
 			children = (
 				AA00000000000000000030 /* VercelSim.app */,
 				AA00000000000000000130 /* VercelSimShare.appex */,
+				AA00000000000000000230 /* VercelSimSafari.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -108,6 +138,16 @@
 			path = ShareExtension;
 			sourceTree = "<group>";
 		};
+		AA00000000000000000211 /* SafariExtension */ = {
+			isa = PBXGroup;
+			children = (
+				AA00000000000000000210 /* Sources */,
+				AA00000000000000000213 /* Resources */,
+				AA00000000000000000212 /* Info.plist */,
+			);
+			path = SafariExtension;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -124,6 +164,7 @@
 			);
 			dependencies = (
 				AA00000000000000000194 /* PBXTargetDependency */,
+				AA00000000000000000294 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				AA00000000000000000010 /* Sources */,
@@ -157,6 +198,29 @@
 			productReference = AA00000000000000000130 /* VercelSimShare.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		AA00000000000000000240 /* VercelSimSafari */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA00000000000000000251 /* Build configuration list for PBXNativeTarget "VercelSimSafari" */;
+			buildPhases = (
+				AA00000000000000000221 /* Sources */,
+				AA00000000000000000220 /* Frameworks */,
+				AA00000000000000000222 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				AA00000000000000000210 /* Sources */,
+				AA00000000000000000213 /* Resources */,
+			);
+			name = VercelSimSafari;
+			packageProductDependencies = (
+			);
+			productName = VercelSimSafari;
+			productReference = AA00000000000000000230 /* VercelSimSafari.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -171,6 +235,9 @@
 						CreatedOnToolsVersion = 16.0;
 					};
 					AA00000000000000000140 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					AA00000000000000000240 = {
 						CreatedOnToolsVersion = 16.0;
 					};
 				};
@@ -191,6 +258,7 @@
 			targets = (
 				AA00000000000000000040 /* VercelSim */,
 				AA00000000000000000140 /* VercelSimShare */,
+				AA00000000000000000240 /* VercelSimSafari */,
 			);
 		};
 /* End PBXProject section */
@@ -204,6 +272,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		AA00000000000000000122 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA00000000000000000222 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -227,6 +302,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AA00000000000000000221 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -234,6 +316,11 @@
 			isa = PBXTargetDependency;
 			target = AA00000000000000000140 /* VercelSimShare */;
 			targetProxy = AA00000000000000000191 /* PBXContainerItemProxy */;
+		};
+		AA00000000000000000294 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA00000000000000000240 /* VercelSimSafari */;
+			targetProxy = AA00000000000000000291 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -442,6 +529,56 @@
 			};
 			name = Release;
 		};
+		AA00000000000000000270 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4G9L2TJ627;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SafariExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.prototype.vercelsim.safari;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		AA00000000000000000271 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 4G9L2TJ627;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SafariExtension/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.prototype.vercelsim.safari;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -468,6 +605,15 @@
 			buildConfigurations = (
 				AA00000000000000000170 /* Debug */,
 				AA00000000000000000171 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA00000000000000000251 /* Build configuration list for PBXNativeTarget "VercelSimSafari" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA00000000000000000270 /* Debug */,
+				AA00000000000000000271 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

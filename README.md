@@ -64,6 +64,13 @@ Safari or the in-app browser. Two ways in:
   (`ShareExtension/`, target `VercelSimShare`) takes the link exactly as shared, including
   the path, `?query` and `#fragment`. It also works when the share is text with a link in it,
   as WhatsApp sends. It then opens the app on that preview.
+- **Safari extension (tap a link anywhere):** *Open in Vercel Sim* (`SafariExtension/`, target
+  `VercelSimSafari`). Turn it on once: Settings ▸ Apps ▸ Safari ▸ Extensions ▸ Open in Vercel
+  Sim ▸ Allow Extension, and set vercel.app to **Allow**. From then on any vercel.app link that
+  opens in Safari (tapped in WhatsApp, Messages, Mail, Notes…) asks "Open this page in Vercel
+  Sim?" and opens it there with the full link. Once per tab, so Cancel stays in Safari. Apps
+  that open links in their own in-app browser (Gmail, Google Chat by default) don't run Safari
+  extensions; use Share ▸ Vercel Sim there, or set the app to open links in Safari.
 - **URL scheme:** `vercelsim://open?url=<percent-encoded link>` or
   `vercelsim://my-app.vercel.app/path?q#f`, from Shortcuts, Notes, a QR code or a web page.
 
