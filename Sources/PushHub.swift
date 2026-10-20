@@ -80,16 +80,16 @@ final class PushHub: ObservableObject {
     enum Link: Equatable { case connecting, live, offline }
 
     static let relay = "https://ntfy.sh"
-    /// Where the push page is hosted, shown in Options. nil until it's deployed.
-    static let webAddress: String? = nil
-    /// The install directory (the push page's /api/devices). Debug builds use the local dev
-    /// server (the simulator reaches the Mac at localhost); release builds the deployed page.
-    static var registryURL: URL? {
+    /// Where the push page is hosted (repo saswata2002/vercel-link-push), shown in Options.
+    static let webAddress: String? = "vercel-link-push.vercel.app"
+    /// The install directory (the push page's /api/devices): the deployed page, plus the local
+    /// dev server in debug builds (the simulator reaches the Mac at localhost), so both list it.
+    static var registryURLs: [URL] {
+        var urls = webAddress.flatMap { URL(string: "https://\($0)/api/devices") }.map { [$0] } ?? []
         #if DEBUG
-        return URL(string: "http://localhost:8153/api/devices")
-        #else
-        return webAddress.flatMap { URL(string: "https://\($0)/api/devices") }
+        if let local = URL(string: "http://localhost:8153/api/devices") { urls.append(local) }
         #endif
+        return urls
     }
     /// Pushes older than this when they reach the phone (it was away) are saved, not opened.
     static let autoOpenWindow: TimeInterval = 10 * 60
@@ -447,30 +447,39 @@ final class PushHub: ObservableObject {
     /// Tell the install directory this phone has the app: on launch (at most every 6 hours)
     /// and straight away when its name or the app version changes. Rooms don't matter here.
     private func register() {
-        guard let url = Self.registryURL else { return }
+        let urls = Self.registryURLs
+        guard !urls.isEmpty else { return }
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
-        let signature = "\(displayName)|\(shownModel)|\(platform)|\(version)"
+        // The directory address is part of it, so a new one (the page moved) checks in straight away.
+        let signature = "\(displayName)|\(shownModel)|\(platform)|\(version)|\(urls[0].host ?? "")"
         if defaults.string(forKey: "registrySignature") == signature,
            let last = defaults.object(forKey: "registeredAt") as? Date, Date().timeIntervalSince(last) < 6 * 3600 { return }
         if defaults.object(forKey: "installedAt") == nil { defaults.set(Date(), forKey: "installedAt") }
         let installed = (defaults.object(forKey: "installedAt") as? Date ?? Date()).timeIntervalSince1970 * 1000
         let body: [String: Any] = ["id": deviceId, "name": displayName, "model": shownModel, "os": platform, "app": version, "installedAt": installed.rounded()]
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        let payload = try? JSONSerialization.data(withJSONObject: body)
         let defaults = defaults
+        let session = session
         Task {
-            do {
-                let (_, response) = try await session.data(for: req)
-                let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-                debugLog("registry: \(code)")
-                if (200..<300).contains(code) {
-                    defaults.set(signature, forKey: "registrySignature")
-                    defaults.set(Date(), forKey: "registeredAt")
+            var landed = false
+            for url in urls {
+                var req = URLRequest(url: url)
+                req.httpMethod = "POST"
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                req.httpBody = payload
+                do {
+                    let (_, response) = try await session.data(for: req)
+                    let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    debugLog("registry \(url.host ?? ""): \(code)")
+                    // The deployed directory (the first) is the one that counts for the 6 h throttle.
+                    if url == urls.first, (200..<300).contains(code) { landed = true }
+                } catch {
+                    debugLog("registry \(url.host ?? "") failed: \(error.localizedDescription)")
                 }
-            } catch {
-                debugLog("registry failed: \(error.localizedDescription)")
+            }
+            if landed {
+                defaults.set(signature, forKey: "registrySignature")
+                defaults.set(Date(), forKey: "registeredAt")
             }
         }
     }
