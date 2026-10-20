@@ -60,6 +60,7 @@ struct PushedLink: Codable, Identifiable, Equatable {
     var from: String?
     var room: String?       // room name
     var at: Date
+    var roomID: String? = nil   // the room's secret (for filtering by room)
 }
 
 /// The card that drops in from the top when something arrives.
@@ -291,7 +292,9 @@ final class PushHub: ObservableObject {
                     let (bytes, response) = try await self.session.bytes(from: url)
                     guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
                     for try await line in bytes.lines {
-                        backoff = 1
+                        // Only a real message proves the stream works: a relay that sends
+                        // "open" and then drops would otherwise be retried every second.
+                        if line.contains("\"event\":\"message\"") { backoff = 1 }
                         self.receive(line, secret: secret)
                     }
                 } catch {
@@ -339,18 +342,21 @@ final class PushHub: ObservableObject {
             debugLog("push: \(url.absoluteString) from \(env.from ?? "?") (open \(env.open ?? false), \(Int(age)) s old)")
             if let name = env.title, !name.isEmpty { pendingTitles[url.absoluteString] = name }
             record(PushedLink(id: id, url: url.absoluteString, title: env.title?.isEmpty == false ? env.title : nil,
-                              from: env.from, room: rooms.first { $0.secret == secret }?.name, at: Date()))
+                              from: env.from, room: rooms.first { $0.secret == secret }?.name, at: Date(), roomID: secret))
             if env.open == true, age < Self.autoOpenWindow {
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                // A teammate sent it on purpose: it goes in the directory straight away (every
+                // one of a burst, not only the one that ends up opening).
+                app?.directory.save(url)
+                applyTitle(for: url)
+                // Several arriving at once (back from the background): one haptic, and the
+                // newest one opens.
+                if openDebounce == nil { UINotificationFeedbackGenerator().notificationOccurred(.success) }
                 show(PushNotice(kind: .opening, title: title, detail: detail, url: url.absoluteString, room: secret, pushId: id))
-                // Several arriving at once (back from the background): the newest one opens.
                 openDebounce?.cancel()
                 openDebounce = Task { [weak self] in
                     try? await Task.sleep(nanoseconds: 350_000_000)
                     guard let self, !Task.isCancelled else { return }
-                    // A teammate sent it on purpose: it goes in the directory straight away.
-                    self.app?.directory.save(url)
-                    self.applyTitle(for: url)
+                    self.openDebounce = nil
                     self.app?.open(url.absoluteString)
                     self.ack(id, "opened", secret: secret)
                 }

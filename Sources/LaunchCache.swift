@@ -9,7 +9,14 @@ enum LaunchCache {
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d
     }()
-    private static var memory: [String: UIImage] = [:]
+    /// Decoded snapshots are full-screen bitmaps (~15 MB at @3x): keep only a few in memory,
+    /// and let iOS drop them under pressure (the JPEGs on disk stay).
+    private static let memory: NSCache<NSString, UIImage> = {
+        let c = NSCache<NSString, UIImage>()
+        c.totalCostLimit = 60 * 1024 * 1024
+        return c
+    }()
+    private static func cost(_ img: UIImage) -> Int { Int(img.size.width * img.size.height * img.scale * img.scale * 4) }
 
     private static func key(_ url: URL, size: CGSize) -> String {
         let raw = "\(url.host ?? "")\(url.path)@\(Int(size.width))x\(Int(size.height))"
@@ -18,16 +25,16 @@ enum LaunchCache {
 
     static func image(for url: URL, size: CGSize) -> UIImage? {
         let k = key(url, size: size)
-        if let m = memory[k] { return m }
+        if let m = memory.object(forKey: k as NSString) { return m }
         guard let data = try? Data(contentsOf: dir.appendingPathComponent(k + ".jpg")),
               let img = UIImage(data: data, scale: UIScreen.main.scale) else { return nil }
-        memory[k] = img
+        memory.setObject(img, forKey: k as NSString, cost: cost(img))
         return img
     }
 
     static func store(_ image: UIImage, for url: URL, size: CGSize) {
         let k = key(url, size: size)
-        memory[k] = image
+        memory.setObject(image, forKey: k as NSString, cost: cost(image))
         DispatchQueue.global(qos: .utility).async {
             if let data = image.jpegData(compressionQuality: 0.82) {
                 try? data.write(to: dir.appendingPathComponent(k + ".jpg"), options: .atomic)

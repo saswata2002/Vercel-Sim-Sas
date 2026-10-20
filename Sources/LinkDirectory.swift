@@ -28,8 +28,16 @@ final class LinkDirectory: ObservableObject {
     private let limit = 50
 
     init() {
-        if let data = UserDefaults.standard.data(forKey: key),
-           let saved = try? JSONDecoder().decode([SavedLink].self, from: data) {
+        if let data = UserDefaults.standard.data(forKey: key) {
+            // One record at a time: a single unreadable entry is skipped, not the whole list.
+            // If the list itself can't be read, keep a copy of it before anything overwrites it.
+            let saved: [SavedLink]
+            if let items = try? JSONDecoder().decode([Lossy<SavedLink>].self, from: data) {
+                saved = items.compactMap(\.value)
+            } else {
+                UserDefaults.standard.set(data, forKey: key + ".unreadable")
+                saved = []
+            }
             links = saved.filter { !Self.isFile($0.url) }
             for i in links.indices where links[i].title.map(Self.isErrorTitle) == true { links[i].title = nil }
             debugLog("directory: loaded \(links.count) [\(links.map(\.host).joined(separator: ", "))]")
@@ -118,82 +126,221 @@ struct LinkDirectoryWidget: View {
     @ObservedObject var directory: LinkDirectory
     /// The one row currently swiped open to show Delete or Edit (like Mail / Messages).
     @State private var openRow: String?
-    /// Scroll position, for the edge feathers: the list's frame in the scroll view's space.
-    @State private var content: CGRect = .zero
-    @State private var viewport: CGFloat = 0
-    /// A real row's height (the lazy stack only estimates rows it hasn't laid out yet).
-    @State private var rowHeight: CGFloat = 0
-    private static let feather: CGFloat = 28
-    /// At most this many rows show at once; more scroll inside the card.
-    private static let visibleRows = 5
-
-    /// The list's height: all rows while they fit, else exactly `visibleRows` of them.
-    private var listHeight: CGFloat? {
-        // From a real row's height: the lazy stack's own height is only an estimate for rows
-        // it hasn't laid out, and lags when links are added, which cut the last row off.
-        let rows = min(directory.links.count, Self.visibleRows)
-        if rowHeight > 0, rows > 0 { return (rowHeight * CGFloat(rows) + CGFloat(rows - 1)).rounded() } // rows + hairlines
-        return content.height > 0 ? content.height : nil
-    }
-
-    /// 0…1: how much is hidden past each edge (fades in over the first 20 pt of scroll).
-    private var topFade: CGFloat { min(max(-content.minY / 20, 0), 1) }
-    private var bottomFade: CGFloat { viewport > 0 ? min(max((content.maxY - viewport) / 20, 0), 1) : 0 }
+    /// The lock screen shows the newest few; the rest live on the Link Directory page.
+    /// Links shown on the lock screen: 3 (the user's max), 2 on short screens (iPhone SE,
+    /// Display Zoom) where two 3-row widgets would run off the screen. Portrait-only app.
+    static var homeRows: Int { UIScreen.main.bounds.height >= 740 ? 3 : 2 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 8) {
-                Text("Link Directory").font(LW.title).foregroundStyle(LW.ink)
-                // How many are saved: the kit's count pill; rolls as links are added or deleted.
-                if !directory.links.isEmpty {
-                    LWCountPill(text: "\(directory.links.count)")
-                        .contentTransition(.numericText(value: Double(directory.links.count)))
-                        .animation(LW.easeOut(240), value: directory.links.count)
-                        .accessibilityLabel("\(directory.links.count) saved")
+            // The header opens the full page.
+            Button {
+                UISelectionFeedbackGenerator().selectionChanged()
+                openRow = nil                 // a swiped-open row closes before the morph starts
+                model.directoryOpen = true
+            } label: {
+                HStack(alignment: .center, spacing: 8) {
+                    Text("Link Directory").font(LW.title).foregroundStyle(LW.ink)
+                    // How many are saved: the kit's count pill; rolls as links are added or deleted.
+                    if !directory.links.isEmpty {
+                        LWCountPill(text: "\(directory.links.count)")
+                            .contentTransition(.numericText(value: Double(directory.links.count)))
+                            .animation(LW.easeOut(240), value: directory.links.count)
+                            .accessibilityLabel("\(directory.links.count) saved")
+                    }
+                    Spacer(minLength: 8)
+                    if !directory.links.isEmpty { WidgetChevron() }
                 }
-                Spacer(minLength: 8)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(LWPress())
+            .disabled(directory.links.isEmpty)
+            .accessibilityLabel("Link Directory, \(directory.links.count) saved. Show all")
 
             if directory.links.isEmpty {
                 LinkDirectoryEmpty()
                     .transition(.opacity.combined(with: .scale(scale: 0.96)))
             } else {
-                ScrollView(.vertical, showsIndicators: false) {
-                    LazyVStack(spacing: 0) {
-                        ForEach(Array(directory.links.enumerated()), id: \.element.id) { index, link in
-                            if index > 0 { LWHairline(inset: 44) }
-                            LinkRow(link: link, openRow: $openRow, open: { model.open(link.url) },
-                                    edit: { model.editingLink = link }, remove: { directory.remove(link) })
-                                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { h in if index == 0 { rowHeight = h } }
-                                .transition(.opacity.combined(with: .move(edge: .top)))
-                        }
-                    }
-                    .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .named("ldScroll")) }) { content = $0 }
-                }
-                .coordinateSpace(.named("ldScroll"))
-                // Hug the rows up to five; past that (or when the screen is too short) scroll.
-                .frame(maxHeight: listHeight)
-                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { viewport = $0 }
-                // Rows feather out at the edges they scroll under instead of being cut off;
-                // each edge only fades while there's more list beyond it.
-                .mask {
-                    VStack(spacing: 0) {
-                        LinearGradient(colors: [.black.opacity(1 - topFade), .black], startPoint: .top, endPoint: .bottom)
-                            .frame(height: Self.feather)
-                        Rectangle()
-                        LinearGradient(colors: [.black, .black.opacity(1 - bottomFade)], startPoint: .top, endPoint: .bottom)
-                            .frame(height: Self.feather)
+                VStack(spacing: 0) {
+                    ForEach(Array(directory.links.prefix(Self.homeRows).enumerated()), id: \.element.id) { index, link in
+                        if index > 0 { LWHairline(inset: 44) }
+                        LinkRow(link: link, openRow: $openRow, open: { model.open(link.url) },
+                                edit: { model.editingLink = link }, remove: { directory.remove(link) })
+                            .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
-                .scrollBounceBehavior(.basedOnSize)
-                // Newest first, so start at the top. Without this the list opened scrolled to
-                // the end, because the card resizes once the safe area arrives at launch.
-                .defaultScrollAnchor(.top)
+                .animation(LW.easeOut, value: directory.links.map(\.id))
             }
         }
         .padding(16)
         .lwSurface(radius: LW.R.sheet)
     }
+}
+
+/// A lock-screen widget morphing into its own page: one card that grows from the widget's
+/// frame to the whole screen (its fill turning into the page background, its border and
+/// corners melting away), one shared header (the title scaling 17 → 22 pt, the back button
+/// opening in, the widget's trailing accessory fading away), and the rows staying put and
+/// reflowing as more is uncovered. On the page the rows sit directly on the background.
+/// `progress` 0 = the widget, 1 = the page; animatable, so it runs every frame (and follows
+/// the back swipe). `rows` gets the progress, to fade in rows the widget didn't show.
+struct CardMorph<Accessory: View, PageAction: View, Rows: View>: View, Animatable {
+    var progress: CGFloat
+    let from: CGRect
+    let screen: CGSize
+    let top: CGFloat
+    let margin: CGFloat
+    let title: String
+    let count: Int
+    let onBack: () -> Void
+    @ViewBuilder let accessory: () -> Accessory
+    /// The page's own top-right action, appearing as the widget's accessory leaves.
+    @ViewBuilder var pageAction: () -> PageAction
+    /// (progress, height available to the rows inside the card).
+    @ViewBuilder let rows: (CGFloat, CGFloat) -> Rows
+    @State private var titleWidth: CGFloat = 0
+    @State private var accessoryWidth: CGFloat = 0
+    @State private var actionWidth: CGFloat = 0
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    private func lerp(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * progress }
+    private func stage(_ start: CGFloat, _ end: CGFloat) -> CGFloat {
+        let t = min(max((progress - start) / (end - start), 0), 1)
+        return t * t * (3 - 2 * t)
+    }
+
+    var body: some View {
+        let rect = CGRect(x: lerp(from.minX, 0), y: lerp(from.minY, 0),
+                          width: lerp(from.width, screen.width), height: lerp(from.height, screen.height))
+        let shape = RoundedRectangle(cornerRadius: max(0, lerp(LW.R.sheet, 0)), style: .continuous)
+
+        ZStack(alignment: .topLeading) {
+            shape.fill(LW.card)
+            shape.fill(LW.bg).opacity(Double(stage(0.1, 0.75)))
+            shape.strokeBorder(LW.line, lineWidth: 1).opacity(Double(1 - stage(0, 0.5)))
+
+            VStack(alignment: .leading, spacing: lerp(10, 16)) {
+                header.frame(height: lerp(28, 36), alignment: .leading)
+                ScrollView(.vertical, showsIndicators: false) {
+                    rows(progress, max(0, rect.height - lerp(16, top) - lerp(28, 36) - lerp(10, 16) - lerp(16, 60)))
+                        .padding(.bottom, 40)
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .scrollDisabled(progress < 0.99)
+            }
+            .padding(.horizontal, lerp(16, margin + 4))
+            .padding(.top, lerp(16, top))
+            .frame(width: rect.width, height: rect.height, alignment: .topLeading)
+        }
+        .frame(width: rect.width, height: rect.height)
+        .clipShape(shape)
+        .offset(x: rect.minX, y: rect.minY)
+        .frame(width: screen.width, height: screen.height, alignment: .topLeading)
+    }
+
+    private var header: some View {
+        let back = stage(0.2, 0.85)
+        let fade = 1 - stage(0, 0.4)
+        let scale = min(max(lerp(17.0 / 22.0, 1), 17.0 / 22.0), 1.02)
+        return HStack(spacing: 0) {
+            LWIconButton(symbol: "chevron.left", look: .soft, size: 36, action: onBack)
+                .scaleEffect(0.6 + 0.4 * back)
+                .opacity(Double(back))
+                .frame(width: 36 * back, alignment: .leading)
+                .padding(.trailing, 10 * back)
+                .allowsHitTesting(progress > 0.99)
+                .accessibilityLabel("Back")
+            // Drawn once at 22 pt and scaled, so the size change is perfectly smooth.
+            Text(title)
+                .font(LW.sans(22, .semibold))
+                .foregroundStyle(LW.ink)
+                .lineLimit(1)
+                .fixedSize()
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { titleWidth = $0 }
+                .scaleEffect(scale, anchor: .leading)
+                .frame(width: titleWidth > 0 ? titleWidth * scale : nil, alignment: .leading)
+            if count > 0 {
+                LWCountPill(text: "\(count)")
+                    .fixedSize()
+                    .padding(.leading, 8)
+                    .contentTransition(.numericText(value: Double(count)))
+                    .animation(LW.easeOut(240), value: count)
+            }
+            Spacer(minLength: 8)
+            // Each side only takes the room it's visibly using, so a wide widget accessory
+            // can't squeeze the count pill on the page (and vice versa).
+            ZStack(alignment: .trailing) {
+                accessory()
+                    .fixedSize()
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { accessoryWidth = $0 }
+                    .scaleEffect(0.7 + 0.3 * fade, anchor: .trailing)
+                    .opacity(Double(fade))
+                    .allowsHitTesting(false)
+                    .frame(width: accessoryWidth > 0 ? accessoryWidth * fade : nil, alignment: .trailing)
+                pageAction()
+                    .fixedSize()
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { actionWidth = $0 }
+                    .scaleEffect(0.85 + 0.15 * back, anchor: .trailing)
+                    .opacity(Double(back))
+                    .allowsHitTesting(progress > 0.99)
+                    .frame(width: actionWidth > 0 ? actionWidth * back : nil, alignment: .trailing)
+            }
+        }
+    }
+}
+
+/// The widget's chevron (opens its page).
+struct WidgetChevron: View {
+    var body: some View {
+        Image(systemName: "chevron.right")
+            .font(.system(size: 13, weight: .semibold)).foregroundStyle(LW.muted)
+            .frame(width: 28, height: 28)
+            .background(Circle().fill(LW.wash(4)))
+    }
+}
+
+/// The Link Directory's morph: all links, the three the widget showed staying in place.
+struct LinkDirectoryMorph: View {
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject var directory: LinkDirectory
+    var progress: CGFloat
+    let from: CGRect
+    let screen: CGSize
+    let top: CGFloat
+    let margin: CGFloat
+    let onBack: () -> Void
+    @State private var openRow: String?
+
+    var body: some View {
+        CardMorph(progress: progress, from: from, screen: screen, top: top, margin: margin,
+                  title: "Link Directory", count: directory.links.count, onBack: onBack) {
+            WidgetChevron()
+        } pageAction: {
+            EmptyView()
+        } rows: { p, _ in
+            LazyVStack(spacing: 0) {
+                ForEach(Array(directory.links.enumerated()), id: \.element.id) { index, link in
+                    if index > 0 { LWHairline(inset: 44) }
+                    LinkRow(link: link, openRow: $openRow, open: { model.open(link.url) },
+                            edit: { model.editingLink = link }, remove: { directory.remove(link) })
+                        .opacity(index < LinkDirectoryWidget.homeRows ? 1 : Double(fadeIn(p)))
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+        }
+        // A row left swiped open on the page is closed next time.
+        .onChange(of: model.directoryOpen) { _, open in if !open { openRow = nil } }
+    }
+}
+
+/// Rows the widget didn't show arrive with the page (0.35 → 1, eased).
+func fadeIn(_ p: CGFloat) -> CGFloat {
+    let t = min(max((p - 0.35) / 0.65, 0), 1)
+    return t * t * (3 - 2 * t)
 }
 
 /// A saved link. Tap opens it. Swipe left reveals Delete (a long swipe deletes straight
@@ -469,7 +616,7 @@ struct LinkEditor: View {
         .padding(.bottom, LWFloatingSheet<EmptyView>.pad)
         .tint(LW.ink)
         .environment(\.colorScheme, .dark)
-        .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { field = .name } }
+        .onAppear { DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { field = .name } }   // rises with the sheet
     }
 
     private func field<Content: View>(_ label: String, hint: String?, error: String? = nil, focused: Bool, @ViewBuilder _ content: () -> Content) -> some View {
@@ -503,10 +650,14 @@ struct LinkEditor: View {
 
 /// Nothing saved yet: the kit's empty state — a wash-1 well with an icon tile, a title and one line.
 private struct LinkDirectoryEmpty: View {
+    /// Short screens (2-row widgets): no icon tile and less padding, so the lock screen fits.
+    private var compact: Bool { LinkDirectoryWidget.homeRows < 3 }
     var body: some View {
         VStack(spacing: 0) {
-            LWIconTile(symbol: "link", size: 44)
-                .padding(.bottom, 12)
+            if !compact {
+                LWIconTile(symbol: "link", size: 44)
+                    .padding(.bottom, 12)
+            }
             Text("No saved links yet")
                 .font(LW.sans(15, .semibold))
                 .foregroundStyle(LW.ink)
@@ -520,7 +671,7 @@ private struct LinkDirectoryEmpty: View {
                 .frame(maxWidth: 250)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 22)
+        .padding(.vertical, compact ? 14 : 22)
         .background(RoundedRectangle(cornerRadius: LW.R.tile, style: .continuous).fill(LW.wash(1)))
         .overlay(RoundedRectangle(cornerRadius: LW.R.tile, style: .continuous).strokeBorder(LW.line, style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
         .padding(.top, 4)
@@ -592,4 +743,10 @@ private struct HorizontalPan: UIGestureRecognizerRepresentable {
             return dx > dy * 1.3
         }
     }
+}
+
+/// Decodes to nil instead of failing, so one bad element doesn't sink a whole array.
+struct Lossy<T: Decodable>: Decodable {
+    let value: T?
+    init(from decoder: Decoder) throws { value = try? T(from: decoder) }
 }

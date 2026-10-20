@@ -91,12 +91,17 @@ enum Scripts {
     /// tag as soon as it appears, keeping keys this doesn't own (interactive-widget, …).
     static func viewportLock(width: String, scale: CGFloat) -> String {
         let s = String(format: "%.5f", Double(scale))
+        // One observer per page: run again (the setting changed), it only updates the wanted
+        // values. Two observers with different values would rewrite each other forever.
         return """
         (() => {
+          window.__vsLockWant = { w: '\(width)', s: '\(s)' };
+          if (window.__vsLockFix) { window.__vsLockFix(); return; }
           const OWN = /^(width|height|initial-scale|minimum-scale|maximum-scale|user-scalable|viewport-fit|shrink-to-fit)$/i;
           const want = (c) => {
+            const { w, s } = window.__vsLockWant;
             const keep = String(c || '').split(',').map((x) => x.trim()).filter((x) => x && !OWN.test(x.split('=')[0].trim()));
-            return ['width=\(width)', 'initial-scale=\(s)', 'minimum-scale=\(s)', 'maximum-scale=\(s)', 'user-scalable=no', 'viewport-fit=cover', ...keep].join(', ');
+            return ['width=' + w, 'initial-scale=' + s, 'minimum-scale=' + s, 'maximum-scale=' + s, 'user-scalable=no', 'viewport-fit=cover', ...keep].join(', ');
           };
           const fixAll = () => {
             const metas = document.querySelectorAll('meta[name="viewport" i]');
@@ -108,6 +113,7 @@ enum Scripts {
             }
             metas.forEach((m) => { const c = want(m.getAttribute('content')); if (m.getAttribute('content') !== c) m.setAttribute('content', c); });
           };
+          window.__vsLockFix = fixAll;
           fixAll();
           new MutationObserver(fixAll).observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ['content', 'name'] });
         })();

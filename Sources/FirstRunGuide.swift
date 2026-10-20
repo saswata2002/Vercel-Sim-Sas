@@ -223,7 +223,7 @@ private struct GuideArt: View {
 private struct Looping: ViewModifier {
     let active: Bool
     let reset: () -> Void
-    let step: @MainActor () async -> Void
+    let step: @MainActor () async throws -> Void
     @State private var task: Task<Void, Never>?
 
     func body(content: Content) -> some View {
@@ -234,14 +234,16 @@ private struct Looping: ViewModifier {
                 guard on else { return }
                 reset()
                 task = Task { @MainActor in
-                    while !Task.isCancelled { await step() }
+                    while !Task.isCancelled { do { try await step() } catch { return } }
                 }
             }
             .onDisappear { task?.cancel(); task = nil }
     }
 }
 
-private func wait(_ ms: Int) async { try? await Task.sleep(for: .milliseconds(ms)) }
+/// Throws once the loop is cancelled, so the rest of a step never runs in one go (which
+/// would flash the art to its end state while the page is still sliding away).
+private func wait(_ ms: Int) async throws { try await Task.sleep(for: .milliseconds(ms)) }
 
 // MARK: shared pieces
 
@@ -406,21 +408,21 @@ private struct OpenArt: View {
             phase = .idle; down = false; tick = false
         }) {
             focused = false; pasted = false; highlight = false; phase = .idle; tick = false
-            await wait(450)
+            try await wait(450)
             withAnimation(LW.easeOut(200)) { focused = true }             // tap the field
-            await wait(1100)
+            try await wait(1100)
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { pasted = true; highlight = true }   // paste
-            await wait(450)
+            try await wait(450)
             withAnimation(.easeOut(duration: 0.5)) { highlight = false }  // selection fades
-            await wait(550)
+            try await wait(550)
             withAnimation(LW.easeOut(90)) { down = true }                // press the arrow
-            await wait(130)
+            try await wait(130)
             withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) { down = false }
             phase = .loading
-            await wait(800)
+            try await wait(800)
             phase = .done
             withAnimation(.spring(response: 0.38, dampingFraction: 0.55)) { tick = true }
-            await wait(1300)
+            try await wait(1300)
         })
     }
 }
@@ -429,7 +431,8 @@ private struct OpenArt: View {
 private struct Caret: View {
     var blinking: Bool
     var body: some View {
-        TimelineView(.animation) { t in
+        // A blink only needs a few redraws a second (and none while it holds still).
+        TimelineView(.animation(minimumInterval: 0.1, paused: !blinking)) { t in
             let on = !blinking || t.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.0) < 0.55
             RoundedRectangle(cornerRadius: 1)
                 .fill(Color(red: 0.35, green: 0.55, blue: 1))
@@ -471,16 +474,16 @@ private struct DirectoryArt: View {
         .modifier(Looping(active: active, reset: { offset = 0; finger = false }) {
             let spring = Animation.spring(response: 0.5, dampingFraction: 0.82)
             for dx in [-92.0, 92.0] {
-                await wait(600)
+                try await wait(600)
                 withAnimation(LW.easeOut(180)) { finger = true }
-                await wait(220)
+                try await wait(220)
                 withAnimation(spring) { offset = dx }
-                await wait(420)
+                try await wait(420)
                 withAnimation(LW.easeOut(200)) { finger = false }
-                await wait(1000)
+                try await wait(1000)
                 withAnimation(spring) { offset = 0 }
             }
-            await wait(300)
+            try await wait(300)
         })
     }
 
@@ -556,18 +559,18 @@ private struct SwipeUpArt: View {
         .modifier(Looping(active: active, reset: { progress = 0; finger = false; fingerY = 0; lockBack = 1; hint = 0 }) {
             progress = 0; fingerY = 0; hint = 0
             withAnimation(.easeOut(duration: 0.9)) { hint = 1 }
-            await wait(800)
+            try await wait(800)
             withAnimation(LW.easeOut(160)) { finger = true }
-            await wait(240)
+            try await wait(240)
             withAnimation(.easeInOut(duration: 0.5)) { fingerY = 1 }
             withAnimation(.spring(response: 0.7, dampingFraction: 0.9)) { progress = 1 }
-            await wait(420)
+            try await wait(420)
             withAnimation(LW.easeOut(200)) { finger = false }
-            await wait(1700)
+            try await wait(1700)
             lockBack = 0
             progress = 0
             withAnimation(LW.easeOut(380)) { lockBack = 1 }
-            await wait(450)
+            try await wait(450)
         })
     }
 }
@@ -617,22 +620,22 @@ private struct OptionsArt: View {
         }
         .modifier(Looping(active: active, reset: { fingers = false; down = false; ripple = 0; sheet = false }) {
             sheet = false
-            await wait(700)
+            try await wait(700)
             withAnimation(LW.easeOut(180)) { fingers = true }
-            await wait(260)
+            try await wait(260)
             for _ in 0..<2 {
                 ripple = 0
                 withAnimation(LW.easeOut(90)) { down = true }
-                await wait(120)
+                try await wait(120)
                 withAnimation(.spring(response: 0.28, dampingFraction: 0.6)) { down = false }
                 withAnimation(.easeOut(duration: 0.45)) { ripple = 1 }
-                await wait(170)
+                try await wait(170)
             }
             withAnimation(LW.easeOut(220)) { fingers = false }
             withAnimation(.spring(response: 0.5, dampingFraction: 0.86)) { sheet = true }
-            await wait(1900)
+            try await wait(1900)
             withAnimation(LW.easeOut(300)) { sheet = false }
-            await wait(500)
+            try await wait(500)
         })
     }
 }
@@ -707,23 +710,23 @@ private struct IterationsArt: View {
         }
         .modifier(Looping(active: active, reset: { selected = 0; target = 1; pressed = nil; finger = false; ripple = 0; spin = 0 }) {
             for next in [1, 2, 3] {                      // 2, 3, then ↺
-                await wait(700)
+                try await wait(700)
                 target = next
                 ripple = 0
                 withAnimation(LW.easeOut(160)) { finger = true }
-                await wait(320)
+                try await wait(320)
                 withAnimation(LW.easeOut(90)) { pressed = next }
-                await wait(120)
+                try await wait(120)
                 withAnimation(.easeOut(duration: 0.45)) { ripple = 1 }
                 if next == 3 {
                     withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { pressed = nil; spin -= 360; selected = 0 }
                 } else {
                     withAnimation(.spring(response: 0.42, dampingFraction: 0.78)) { pressed = nil; selected = next }
                 }
-                await wait(220)
+                try await wait(220)
                 withAnimation(LW.easeOut(220)) { finger = false }
             }
-            await wait(500)
+            try await wait(500)
         })
     }
 }

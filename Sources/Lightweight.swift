@@ -110,6 +110,26 @@ extension EnvironmentValues {
     }
 }
 
+/// The keyboard's own motion, so whatever rides on it (sheets, the paste card) moves in step:
+/// the duration iOS reports for this show/hide, on the keyboard's curve (UIKit curve 7,
+/// approximated as a bezier). Also remembers where the keyboard last stood.
+enum KeyboardMotion {
+    static let curve = (0.38, 0.7, 0.125, 1.0)
+    private(set) static var last = Animation.timingCurve(curve.0, curve.1, curve.2, curve.3, duration: 0.25)
+    /// The keyboard's top edge the last time it was up (screen points).
+    private(set) static var lastTop: CGFloat?
+
+    /// The animation for this keyboard notification (nil when iOS moves it without one).
+    static func animation(_ n: Notification) -> Animation? {
+        let d = (n.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double) ?? 0.25
+        if let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue,
+           end.minY < UIScreen.main.bounds.height { lastTop = end.minY }
+        guard d > 0 else { return nil }
+        last = .timingCurve(curve.0, curve.1, curve.2, curve.3, duration: d)
+        return last
+    }
+}
+
 /// A floating bottom sheet: a card inset from the screen's sides and bottom with every corner
 /// rounded, a hairline border and a soft shadow, over a scrim. The system sheet always draws
 /// its own glass edge on iOS 26, so this is drawn here instead. It slides up on a spring,
@@ -137,6 +157,11 @@ struct LWFloatingSheet<Sheet: View>: ViewModifier {
     @State private var keyboardTop: CGFloat = UIScreen.main.bounds.height
 
     static var inset: CGFloat { 10 }
+    /// Room left above a sheet pushed up by the keyboard: the status bar / Dynamic Island.
+    static var topClearance: CGFloat {
+        let window = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        return max(54, (window?.safeAreaInsets.top ?? 0) + 6)
+    }
     /// The sheet's corner radius: 32 pt on every iPhone (decreased from the display-concentric
     /// ~52 pt at the user's request).
     static var radius: CGFloat { 32 }
@@ -168,16 +193,22 @@ struct LWFloatingSheet<Sheet: View>: ViewModifier {
             .ignoresSafeArea(.container, edges: .bottom)
             .ignoresSafeArea(.keyboard)                                  // handled by `keyboard`
             .animation(.spring(response: 0.44, dampingFraction: 0.9), value: isPresented)
+            // Reopened right after a drag-close: start from rest, not from the drag offset.
+            .onChange(of: isPresented) { _, on in
+                guard on, drag != 0 else { return }
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { drag = 0 }
+            }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
                 guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
                 let covered = max(0, UIScreen.main.bounds.height - end.minY)
-                withAnimation(.spring(response: 0.36, dampingFraction: 0.92)) {
+                withAnimation(KeyboardMotion.animation(n)) {
                     keyboard = covered
                     keyboardTop = covered > 0 ? end.minY : UIScreen.main.bounds.height
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                withAnimation(.spring(response: 0.36, dampingFraction: 0.92)) { keyboard = 0; keyboardTop = UIScreen.main.bounds.height }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { n in
+                withAnimation(KeyboardMotion.animation(n)) { keyboard = 0; keyboardTop = UIScreen.main.bounds.height }
             }
         }
     }
@@ -218,7 +249,7 @@ struct LWFloatingSheet<Sheet: View>: ViewModifier {
         .padding(.horizontal, Self.inset)
         // Above the keyboard when it's up, the same `inset` as the sides on every device.
         .padding(.bottom, keyboard > 0 ? max(Self.inset, hostMaxY - keyboardTop + Self.inset) : Self.inset)
-        .padding(.top, keyboard > 0 ? 54 : 0)                            // …and clear of the status bar
+        .padding(.top, keyboard > 0 ? Self.topClearance : 0)              // …and clear of the status bar
         .offset(y: max(0, drag) + min(0, drag) * 0.15)          // a little resistance upward
         .accessibilityAction(.escape) { close() }
         .onChange(of: holding) { _, down in
@@ -230,7 +261,7 @@ struct LWFloatingSheet<Sheet: View>: ViewModifier {
     private func close() {
         debugLog("floating sheet: close")
         withAnimation(.spring(response: 0.38, dampingFraction: 0.92)) { isPresented = false }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { drag = 0 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { if !isPresented { drag = 0 } }
     }
 }
 

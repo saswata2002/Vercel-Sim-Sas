@@ -185,6 +185,6 @@ final class ReadyMessageHandler: NSObject, WKScriptMessageHandler {
         let why = (message.body as? [String: Any])?["why"] as? String ?? "ready"
         let href = (message.body as? [String: Any])?["href"] as? String ?? ""
         guard !href.hasPrefix("about:") else { return }
-        Task { @MainActor in self.model?.pageBecameReady(why) }
+        Task { @MainActor in self.model?.pageSignalledReady(why, href: href) }
     }
 }

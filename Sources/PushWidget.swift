@@ -6,31 +6,108 @@ import SwiftUI
 struct PushWidget: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var hub: PushHub
-    private static let maxRows = 2
+    /// The Link Directory card's height: the empty widget matches it.
+    var matchHeight: CGFloat? = nil
+    /// Set when this renders the page's list inside the morph (the morph's progress).
+    var listProgress: CGFloat? = nil
+    /// The height the page gives the list (to centre the empty state).
+    var listHeight: CGFloat = 0
+    private static var maxRows: Int { LinkDirectoryWidget.homeRows }   // like the Link Directory
+    /// The room the list is filtered to (its secret); nil = every room.
+    @State private var roomFilter: String?
+
+    private var multiRoom: Bool { hub.rooms.count >= 2 }
+    private var shown: [PushedLink] {
+        guard let id = roomFilter, multiRoom, false else { return hub.received }
+        return hub.received.filter { $0.roomID == id || ($0.roomID == nil && $0.room == hub.rooms.first { $0.secret == id }?.name) }
+    }
 
     var body: some View {
-        ViewThatFits(in: .vertical) {
-            card(rows: Self.maxRows)
-            card(rows: 1)
-            card(rows: 0)
+        if let progress = listProgress {
+            pageList(progress)
+        } else {
+            widget
         }
+    }
+
+    private var widget: some View {
+        // Up to 3 links (2 on short screens), like the Link Directory.
+        card(rows: Self.maxRows)
+        #if DEBUG
+        // Testing: -pushRoom N opens the card filtered to room N (0-based).
+        .onAppear {
+            let args = ProcessInfo.processInfo.arguments
+            if let i = args.firstIndex(of: "-pushRoom"), i + 1 < args.count, let n = Int(args[i + 1]), hub.rooms.indices.contains(n) {
+                roomFilter = hub.rooms[n].secret
+            }
+        }
+        #endif
     }
 
     private func card(rows: Int) -> some View {
         Group {
-            if hub.rooms.isEmpty { joinCTA } else { roomCard(rows: rows) }
+            if hub.rooms.isEmpty { joinWidget(compact: rows == 0) } else { roomCard(rows: rows) }
         }
     }
 
     /// No room yet: just the call to action, a full-width pill that opens Join a room.
-    private var joinCTA: some View {
+    /// No room yet: a widget like the Link Directory (title, then a dashed empty state with a
+    /// Join button), as tall as the Link Directory card so the two sit as a pair. On a short
+    /// screen (`compact`) just the title and the button.
+    private func joinWidget(compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            header
+            if compact {
+                joinButton
+            } else {
+                joinWell
+            }
+        }
+        .padding(16)
+        // As tall as the Link Directory card (measured), never shorter than its content.
+        .frame(maxWidth: .infinity, minHeight: compact ? nil : matchHeight, alignment: .top)
+        .lwSurface(radius: LW.R.sheet)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var joinWell: some View {
+        Button { UISelectionFeedbackGenerator().selectionChanged(); model.pushJoinOpen = true } label: {
+            VStack(spacing: 0) {
+                if LinkDirectoryWidget.homeRows == 3 {      // no icon on short screens, like the directory's
+                    LWIconTile(symbol: "dot.radiowaves.left.and.right", size: 36)
+                        .padding(.bottom, 10)
+                }
+                Text("No rooms yet")
+                    .font(LW.sans(15, .semibold))
+                    .foregroundStyle(LW.ink)
+                    .padding(.bottom, 14)
+                HStack(spacing: 6) {
+                    Image(systemName: "plus").font(.system(size: 12, weight: .bold))
+                    Text("Join room").font(LW.ui)
+                }
+                .foregroundStyle(LW.onInk)
+                .padding(.horizontal, 16)
+                .frame(height: 32)
+                .background(Capsule().fill(LW.ink))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: LW.R.tile, style: .continuous).fill(LW.wash(1)))
+            .overlay(RoundedRectangle(cornerRadius: LW.R.tile, style: .continuous).strokeBorder(LW.line, style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
+            .contentShape(RoundedRectangle(cornerRadius: LW.R.tile, style: .continuous))
+        }
+        .buttonStyle(LWPress())
+        .accessibilityLabel("No rooms yet. Join room")
+    }
+
+    private var joinButton: some View {
         Button { UISelectionFeedbackGenerator().selectionChanged(); model.pushJoinOpen = true } label: {
             HStack(spacing: 8) {
                 Image(systemName: "plus").font(.system(size: 14, weight: .bold))
                 Text("Join a room").font(LW.ui)
             }
             .foregroundStyle(LW.onInk)
-            .frame(maxWidth: .infinity, minHeight: 52)
+            .frame(maxWidth: .infinity, minHeight: 44)
             .background(Capsule().fill(LW.ink))
             .contentShape(Capsule())
         }
@@ -38,14 +115,38 @@ struct PushWidget: View {
         .accessibilityLabel("Join a room to get links pushed from your browser")
     }
 
+    /// The page: room chips (with join), every pushed link (the widget's two stay put, the
+    /// rest fade in), or the empty state with the Join button.
+    private func pageList(_ p: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if hub.rooms.isEmpty {
+                // The dashed well grows with the morph to fill the page, its content centred.
+                joinWell
+                    .frame(maxWidth: .infinity, minHeight: max(listHeight, (matchHeight ?? 0) - 70))
+            } else {
+                if shown.isEmpty {
+                    empty(symbol: "tray", text: roomFilter == nil || !multiRoom ? "Links pushed from the web will appear here." : "Nothing pushed to this room yet.", action: nil)
+                } else {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(shown.enumerated()), id: \.element.id) { i, link in
+                            if i > 0 { LWHairline(inset: 44) }
+                            row(link, copy: Double(fadeIn(p))).opacity(i < Self.maxRows ? 1 : Double(fadeIn(p)))
+                        }
+                    }
+                }
+
+            }
+        }
+    }
+
     private func roomCard(rows: Int) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             header
-            if hub.received.isEmpty {
-                empty(symbol: "tray", text: "Links pushed from the web will appear here.", action: nil)
+            if shown.isEmpty {
+                empty(symbol: "tray", text: roomFilter == nil || !multiRoom ? "Links pushed from the web will appear here." : "Nothing pushed to this room yet.", action: nil)
             } else if rows > 0 {
                 VStack(spacing: 0) {
-                    ForEach(Array(hub.received.prefix(rows).enumerated()), id: \.element.id) { i, link in
+                    ForEach(Array(shown.prefix(rows).enumerated()), id: \.element.id) { i, link in
                         if i > 0 { LWHairline(inset: 44) }
                         row(link)
                     }
@@ -58,55 +159,129 @@ struct PushWidget: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
+    /// The header opens the full page (title, count, chevron); "+ Join" sits beside the chevron
+    /// as its own button once a room is joined.
     private var header: some View {
         HStack(spacing: 8) {
-            Text("Pushed from web").font(LW.title).foregroundStyle(LW.ink)
-            if !hub.received.isEmpty {
-                LWCountPill(text: "\(hub.received.count)")
-            }
-            Spacer(minLength: 8)
-            if !hub.rooms.isEmpty {
-                let connecting = !hub.isLive && hub.links.values.contains(.connecting)
-                HStack(spacing: 5) {
-                    Circle().fill(hub.isLive ? LW.open : LW.muted.opacity(connecting ? 0.9 : 0.6)).frame(width: 6, height: 6)
-                    Text(hub.isLive ? "Live" : connecting ? "Connecting" : "Offline").font(LW.caption).foregroundStyle(LW.muted)
+            Button(action: openPage) {
+                HStack(spacing: 8) {
+                    Text("Shared with you").font(LW.title).foregroundStyle(LW.ink)
+                        .lineLimit(1).fixedSize()
+                    if !hub.received.isEmpty { LWCountPill(text: "\(hub.received.count)") }
+                    Spacer(minLength: 8)
                 }
-                .padding(.horizontal, 8)
-                .frame(height: 22)
-                .background(Capsule().fill(LW.wash(4)))
-                .animation(LW.easeOut, value: hub.isLive)
-                .accessibilityLabel(hub.isLive ? "Connected" : connecting ? "Connecting" : "Offline")
+                .frame(minHeight: 28)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(LWPress())
+            .accessibilityLabel("Shared with you. Show all")
+            if !hub.rooms.isEmpty { PushPageJoin(height: 28) }
+            Button(action: openPage) { WidgetChevron().contentShape(Circle()) }
+                .buttonStyle(LWPress())
+                .accessibilityLabel("Show all")
         }
     }
 
-    private func row(_ link: PushedLink) -> some View {
-        Button { model.open(link.url) } label: {
-            HStack(spacing: 12) {
-                LWLetterBadge(letter: String((link.title ?? URL(string: link.url)?.host ?? "?").prefix(1)).uppercased())
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(link.title ?? AppModel.display(link.url))
-                        .font(LW.bodyMedium).foregroundStyle(LW.ink).lineLimit(1)
-                    Text(subtitle(link))
-                        .font(LW.sans(13)).foregroundStyle(LW.muted).lineLimit(1).truncationMode(.middle)
+    private func openPage() {
+        UISelectionFeedbackGenerator().selectionChanged()
+        model.pushPageOpen = true
+    }
+
+    /// `copy`: the copy button's visibility (page only, fading in with the morph); nil on the widget.
+    private func row(_ link: PushedLink, copy: Double? = nil) -> some View {
+        HStack(spacing: 8) {
+            Button { model.open(link.url) } label: {
+                HStack(spacing: 12) {
+                    LWLetterBadge(letter: String((link.title ?? URL(string: link.url)?.host ?? "?").prefix(1)).uppercased())
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(link.title ?? AppModel.display(link.url))
+                            .font(LW.bodyMedium).foregroundStyle(LW.ink).lineLimit(1)
+                        Text(subtitle(link))
+                            .font(LW.sans(13)).foregroundStyle(LW.muted).lineLimit(1).truncationMode(.middle)
+                    }
+                    Spacer(minLength: 8)
                 }
-                Spacer(minLength: 8)
-                Image(systemName: "arrow.up.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(LW.muted)
+                .frame(height: 52)
+                .contentShape(Rectangle())
             }
-            .frame(height: 52)
-            .contentShape(Rectangle())
+            .buttonStyle(LWPress())
+            .accessibilityLabel("\(link.title ?? AppModel.display(link.url)), \(subtitle(link))")
+            // Copy the link without opening it (on the full page only).
+            if let copy {
+                CopyLinkButton(url: link.url).opacity(copy).allowsHitTesting(copy > 0.99)
+            }
         }
-        .buttonStyle(LWPress())
         .contextMenu {
             Button { UIPasteboard.general.string = link.url } label: { Label("Copy Link", systemImage: "doc.on.doc") }
             Button(role: .destructive) { hub.clearReceived() } label: { Label("Clear pushed links", systemImage: "trash") }
         }
-        .accessibilityLabel("\(link.title ?? AppModel.display(link.url)), \(subtitle(link))")
     }
 
     private func subtitle(_ link: PushedLink) -> String {
         let who = link.from.map { "From \($0)" } ?? AppModel.display(link.url)
-        return "\(who) · \(Self.ago(link.at))"
+        // Under "All" with several rooms, say which room it came from.
+        if multiRoom, roomFilter == nil, let room = roomName(link) { return "\(who) · \(room)" }
+        return who
+    }
+
+    private func roomName(_ link: PushedLink) -> String? {
+        if let id = link.roomID, let r = hub.rooms.first(where: { $0.secret == id }) { return r.name }
+        return link.room
+    }
+
+    private func count(in room: PushRoom) -> Int {
+        hub.received.filter { $0.roomID == room.secret || ($0.roomID == nil && $0.room == room.name) }.count
+    }
+
+    /// Two or more rooms: All, one chip per room (its own live dot and count), and join.
+    private var roomChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                chip(title: "All", count: hub.received.count, dot: nil, selected: roomFilter == nil) { roomFilter = nil }
+                ForEach(hub.rooms) { room in
+                    chip(title: room.name, count: count(in: room), dot: hub.links[room.secret] ?? .offline,
+                         selected: roomFilter == room.secret) { roomFilter = room.secret }
+                        .contextMenu {
+                            Button(role: .destructive) {
+                                if roomFilter == room.secret { roomFilter = nil }
+                                withAnimation(LW.easeOut) { hub.leave(room) }
+                            } label: { Label("Leave \(room.name)", systemImage: "rectangle.portrait.and.arrow.right") }
+                        }
+                }
+                Button { model.pushJoinOpen = true } label: {
+                    Image(systemName: "plus").font(.system(size: 12, weight: .bold)).foregroundStyle(LW.muted)
+                        .frame(width: 32, height: 32)
+                        .background(Circle().strokeBorder(LW.line, style: StrokeStyle(lineWidth: 1, dash: [3, 3])))
+                }
+                .buttonStyle(LWPress())
+                .accessibilityLabel("Join another room")
+            }
+        }
+        .animation(LW.easeOut, value: roomFilter)
+    }
+
+    private func chip(title: String, count: Int, dot: PushHub.Link?, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            UISelectionFeedbackGenerator().selectionChanged()
+            withAnimation(LW.easeOut) { action() }
+        } label: {
+            HStack(spacing: 6) {
+                if let dot {
+                    Circle().fill(dot == .live ? LW.open : LW.muted.opacity(dot == .connecting ? 0.9 : 0.5)).frame(width: 6, height: 6)
+                }
+                Text(title).font(LW.sans(13, .medium)).lineLimit(1)
+                if count > 0 {
+                    Text("\(count)").font(LW.micro).monospacedDigit()
+                        .foregroundStyle(selected ? LW.onInk.opacity(0.7) : LW.muted)
+                }
+            }
+            .foregroundStyle(selected ? LW.onInk : LW.ink)
+            .padding(.horizontal, 12)
+            .frame(height: 32)
+            .background(Capsule().fill(selected ? LW.ink : LW.wash(4)))
+        }
+        .buttonStyle(LWPress())
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func empty(symbol: String, text: String, action: (String, () -> Void)?) -> some View {
@@ -144,25 +319,21 @@ struct PushJoinSheet: View {
     @State private var invalid = false
     @FocusState private var field: Field?
     private enum Field { case link, name, device }
-    @Namespace private var platformNS
 
     private var invite: PushInvite? { PushHub.invite(from: link) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            // Header: what this is, in one glance.
-            HStack(spacing: 12) {
+            // Header: one line, icon and title.
+            HStack(spacing: 10) {
                 Image(systemName: "dot.radiowaves.left.and.right")
-                    .font(.system(size: 17, weight: .semibold)).foregroundStyle(LW.ink)
-                    .frame(width: 44, height: 44)
-                    .background(RoundedRectangle(cornerRadius: LW.R.control, style: .continuous).fill(LW.wash(4)))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Join a room").font(LW.sans(20, .semibold)).foregroundStyle(LW.ink)
-                    Text("Links pushed to the room open on this phone.")
-                        .font(LW.sans(13)).foregroundStyle(LW.muted).lineLimit(1).minimumScaleFactor(0.85)
-                }
+                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(LW.ink)
+                    .frame(width: 32, height: 32)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(LW.wash(4)))
+                Text("Join a room").font(LW.sans(20, .semibold)).foregroundStyle(LW.ink)
                 Spacer(minLength: 0)
             }
+            .padding(.leading, 14)  // icon lines up with the link row's
 
             // One grouped card: the link, then how this phone appears on the web.
             VStack(spacing: 0) {
@@ -172,38 +343,10 @@ struct PushJoinSheet: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .focused($field, equals: .link)
-                        .submitLabel(.next)
-                        .onSubmit { field = .name }
-                        .onChange(of: link) { invalid = false }
-                    if link.isEmpty {
-                        Button("Paste") { link = UIPasteboard.general.string ?? "" }
-                            .font(LW.label).foregroundStyle(LW.ink)
-                            .padding(.horizontal, 12).frame(height: 30)
-                            .background(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.nested(13), style: .continuous).fill(LW.wash(5)))
-                            .buttonStyle(LWPress())
-                    } else {
-                        clearButton { link = "" }
-                    }
-                }
-                LWHairline(inset: 58)
-                groupRow("person", focused: field == .name) {
-                    TextField("", text: $name, prompt: Text("Your name").foregroundStyle(LW.muted))
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled()
-                        .focused($field, equals: .name)
-                        .submitLabel(.next)
-                        .onSubmit { field = .device }
-                    if !name.isEmpty, field == .name { clearButton { name = "" } }
-                }
-                LWHairline(inset: 58)
-                groupRow(platform == "iOS" ? "iphone" : "smartphone", focused: field == .device) {
-                    TextField("", text: $device, prompt: Text(hub.model).foregroundStyle(LW.muted))
-                        .textInputAutocapitalization(.words)
-                        .autocorrectionDisabled()
-                        .focused($field, equals: .device)
                         .submitLabel(.join)
                         .onSubmit(join)
-                    if !device.isEmpty, field == .device { clearButton { device = "" } }
+                        .onChange(of: link) { invalid = false }
+                    if !link.isEmpty { clearButton { link = "" } }
                 }
             }
             .background(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous).fill(LW.card))
@@ -217,33 +360,10 @@ struct PushJoinSheet: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
 
-            // Platform: a labelled segmented control.
-            HStack(spacing: 4) {
-                ForEach(PushHub.platforms, id: \.self) { p in
-                    Button {
-                        UISelectionFeedbackGenerator().selectionChanged()
-                        withAnimation(LW.easeOut(240)) { platform = p }
-                    } label: {
-                        HStack(spacing: 7) {
-                            Image(systemName: p == "iOS" ? "apple.logo" : "smartphone").font(.system(size: 14, weight: .semibold))
-                            Text(p).font(LW.ui)
-                        }
-                        .foregroundStyle(platform == p ? LW.ink : LW.muted)
-                        .frame(maxWidth: .infinity, minHeight: 40)
-                        .background {
-                            if platform == p {
-                                RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.nested(4), style: .continuous).fill(LW.raised).matchedGeometryEffect(id: "platform", in: platformNS)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(platform == p ? .isSelected : [])
-                }
+            // Platform: two choice cards, built like the link row above.
+            HStack(spacing: 10) {
+                ForEach(PushHub.platforms, id: \.self) { p in platformCard(p) }
             }
-            .padding(4)
-            .background(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous).fill(LW.card))
-            .overlay(RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous).strokeBorder(LW.line, lineWidth: 1))
 
             // The one action: ink when ready, a quiet outline until there's a link.
             let ready = !link.trimmingCharacters(in: .whitespaces).isEmpty
@@ -271,9 +391,35 @@ struct PushJoinSheet: View {
             name = hub.deviceName == hub.model ? "" : hub.deviceName
             device = hub.deviceLabel
             platform = hub.platform
-            // A room link already on the clipboard fills in by itself.
-            if let clip = UIPasteboard.general.string, PushHub.invite(from: clip) != nil { link = clip }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { field = link.isEmpty ? .link : .name }
+            fillFromClipboard()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { field = .link }   // rises with the sheet
+        }
+    }
+
+    /// The room link found on the clipboard, per copy (`changeCount`), so iOS isn't asked to
+    /// "Allow Paste" again each time the sheet opens.
+    private static var clipboardInvite: (count: Int, invite: String?)?
+
+    /// A room link already on the clipboard fills in by itself. Its contents are only read
+    /// when iOS says (without reading them, so without asking) that it holds a link.
+    private func fillFromClipboard() {
+        let pb = UIPasteboard.general
+        let count = pb.changeCount
+        if let cached = Self.clipboardInvite, cached.count == count {
+            if let invite = cached.invite, link.isEmpty { link = invite }
+            return
+        }
+        Self.clipboardInvite = (count, nil)
+        let read = {
+            guard let clip = pb.string, PushHub.invite(from: clip) != nil else { return }
+            Self.clipboardInvite = (count, clip)
+            if link.isEmpty { link = clip }
+        }
+        if pb.hasURLs { read(); return }                      // vercelsim://pair?… copied as a URL
+        guard pb.hasStrings else { return }
+        pb.detectPatterns(for: [\.probableWebURL]) { result in
+            guard case .success(let found) = result, found.contains(\.probableWebURL) else { return }
+            DispatchQueue.main.async(execute: read)
         }
     }
 
@@ -294,6 +440,44 @@ struct PushJoinSheet: View {
         .contentShape(Rectangle())
     }
 
+    /// One platform choice: icon tile, name, and a radio that fills when picked.
+    private func platformCard(_ p: String) -> some View {
+        let on = platform == p
+        let shape = RoundedRectangle(cornerRadius: LWFloatingSheet<EmptyView>.innerRadius, style: .continuous)
+        return Button {
+            guard !on else { return }
+            UISelectionFeedbackGenerator().selectionChanged()
+            withAnimation(.spring(duration: 0.32, bounce: 0.18)) { platform = p }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: p == "iOS" ? "apple.logo" : "smartphone")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(on ? LW.onInk : LW.muted)
+                    .frame(width: 32, height: 32)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(on ? LW.ink : LW.wash(3)))
+                Text(p).font(LW.ui).foregroundStyle(on ? LW.ink : LW.muted)
+                    .lineLimit(1).minimumScaleFactor(0.85)   // narrow phones (SE): never "Androi / d"
+                    .layoutPriority(1)
+                Spacer(minLength: 0)
+                ZStack {
+                    Circle().strokeBorder(on ? LW.ink : LW.line, lineWidth: on ? 0 : 1.5)
+                    Circle().fill(LW.ink).scaleEffect(on ? 1 : 0.2).opacity(on ? 1 : 0)
+                    Image(systemName: "checkmark").font(.system(size: 9, weight: .heavy))
+                        .foregroundStyle(LW.onInk).scaleEffect(on ? 1 : 0.4).opacity(on ? 1 : 0)
+                }
+                .frame(width: 18, height: 18)
+            }
+            .padding(.leading, 12).padding(.trailing, 14)
+            .frame(maxWidth: .infinity, minHeight: 56)
+            .background(shape.fill(on ? LW.raised : LW.card))
+            .overlay(shape.strokeBorder(on ? LW.ink.opacity(0.5) : LW.line, lineWidth: 1))
+            .contentShape(shape)
+        }
+        .buttonStyle(LWPress())
+        .accessibilityLabel(p)
+        .accessibilityAddTraits(on ? .isSelected : [])
+    }
+
     private func clearButton(_ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: "xmark.circle.fill").font(.system(size: 17)).foregroundStyle(LW.muted)
@@ -308,12 +492,98 @@ struct PushJoinSheet: View {
             UINotificationFeedbackGenerator().notificationOccurred(.error)
             return
         }
-        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        hub.deviceName = n
-        hub.deviceLabel = device.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Name and device aren't asked for here any more; the phone keeps its current ones.
         hub.platform = platform
         hub.join(invite)
         field = nil
         dismiss()
+    }
+}
+
+/// The widget header's trailing bits as the morph draws them: "+ Join" (with a room) and the chevron.
+struct PushAccessory: View {
+    @ObservedObject var hub: PushHub
+    var body: some View {
+        HStack(spacing: 8) {
+            if !hub.rooms.isEmpty { PushPageJoin(height: 28).allowsHitTesting(false) }
+            WidgetChevron()
+        }
+    }
+}
+
+/// Pushed from web's morph into its page.
+struct PushMorph: View {
+    @ObservedObject var hub: PushHub
+    var progress: CGFloat
+    let from: CGRect
+    let screen: CGSize
+    let top: CGFloat
+    let margin: CGFloat
+    let matchHeight: CGFloat?
+    let onBack: () -> Void
+
+    var body: some View {
+        CardMorph(progress: progress, from: from, screen: screen, top: top, margin: margin,
+                  title: "Shared with you", count: hub.received.count, onBack: onBack) {
+            PushAccessory(hub: hub)
+        } pageAction: {
+            // Join another room, top right (the empty state has its own button).
+            if !hub.rooms.isEmpty { PushPageJoin() }
+        } rows: { p, available in
+            PushWidget(hub: hub, matchHeight: matchHeight, listProgress: p, listHeight: available)
+        }
+    }
+}
+
+/// "+ Join" at the top right of the Shared with you page and on the widget header.
+struct PushPageJoin: View {
+    @EnvironmentObject private var model: AppModel
+    /// 34 on the page; 28 on the widget, the chevron's size.
+    var height: CGFloat = 34
+    var body: some View {
+        Button { UISelectionFeedbackGenerator().selectionChanged(); model.pushJoinOpen = true } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "plus").font(.system(size: 12, weight: .bold))
+                Text("Join").font(height < 34 ? LW.label : LW.ui)
+            }
+            .fixedSize()
+            .foregroundStyle(LW.ink)
+            .padding(.horizontal, height < 34 ? 11 : 14)
+            .frame(height: height)
+            .background(Capsule().fill(LW.wash(5)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(LWPress())
+        .accessibilityLabel("Join another room")
+    }
+}
+
+/// A round copy button at the end of a row: copies the link and briefly turns into a tick.
+struct CopyLinkButton: View {
+    let url: String
+    @State private var copied = false
+    @State private var reset: DispatchWorkItem?
+
+    var body: some View {
+        Button {
+            UIPasteboard.general.string = url
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            withAnimation(LW.easeOut(200)) { copied = true }
+            reset?.cancel()
+            let work = DispatchWorkItem { withAnimation(LW.easeOut(200)) { copied = false } }
+            reset = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4, execute: work)
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(copied ? LW.ink : LW.muted)
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 32, height: 32)
+                .background(Circle().fill(LW.wash(4)))
+                .frame(width: 44, height: 52, alignment: .trailing)   // full-height tap target; lines up with the chevron
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(LWPress())
+        .accessibilityLabel(copied ? "Copied" : "Copy link")
     }
 }

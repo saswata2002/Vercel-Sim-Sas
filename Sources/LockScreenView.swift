@@ -18,14 +18,51 @@ struct LockScreenView: View {
     @State private var joinBlur = false
     /// Pasting a link: the link card comes forward on its own, everything else steps away.
     @State private var pasteMode = false
-    /// The link card's resting bottom edge and the keyboard's top edge (screen points), so
+    /// The Link Directory page's push: 0 = closed, 1 = open.
+    @State private var push: CGFloat = 0
+    /// The edge-back drag is down. Gesture state, so it also resets when the system cancels
+    /// the drag (Notification Center, a call) and the page still settles.
+    @GestureState private var edgeDragging = false
+    /// The open morph has finished: the edge-back strip only takes touches after this, so a
+    /// drag can't snap a half-grown card to full screen.
+    @State private var pageSettled = false
+    /// Bumped on every open/close, so a superseded close's completion can't hide the card.
+    @State private var morphGen = 0
+    /// The Link Directory widget's frame on screen (the morph's starting shape).
+    @State private var widgetFrame: CGRect = .zero
+    /// The morphing card is on screen (switched without animation, so it never fades).
+    @State private var morphShown = false
+    /// Which widget is (or was last) morphing into its page.
+    private enum Expanded { case directory, push }
+    @State private var expanded = Expanded.directory
+    /// Pushed from web's frame on screen (its morph's starting shape).
+    @State private var pushFrame: CGRect = .zero
+    private var pageOpen: Bool { model.directoryOpen || model.pushPageOpen }
+    private func closePage() { model.directoryOpen = false; model.pushPageOpen = false }
+    /// The other widgets stepping away (0 → 1), faster than the morph so nothing overlaps.
+    @State private var away: CGFloat = 0
+    /// Critically damped, so the push never overshoots.
+    /// Apple-style: smooth, with the slightest settle (like App Store cards opening).
+    static let pushSpring = Animation.spring(duration: 0.5, bounce: 0.12)
+    /// The link card's resting top edge and the keyboard's top edge (screen points), so
     /// in paste mode the card can sit just above the keyboard on any iPhone.
-    @State private var cardMaxY: CGFloat = 0
+    @State private var cardMinY: CGFloat = 0
+    /// The card's live height: it grows a little in paste mode (the back button's row), and
+    /// the gap above the keyboard has to account for that.
+    @State private var cardHeight: CGFloat = 0
     @State private var keyboardTop: CGFloat = UIScreen.main.bounds.height
+    /// The field is focused but iOS reported no on-screen keyboard (a hardware keyboard).
+    @State private var hardwareKeyboard = false
     /// How far the card travels down in paste mode: to `gap` above the keyboard.
     private var pasteDrop: CGFloat {
-        guard cardMaxY > 0, keyboardTop < UIScreen.main.bounds.height else { return 28 }
-        return max(0, keyboardTop - 16 - cardMaxY)   // reads as the sheets' 10 pt gap
+        guard cardHeight > 0 else { return 28 }
+        // Before the keyboard reports in, aim for where it stood last time (or a typical
+        // iPhone keyboard), so the card goes there in one move instead of two.
+        let h = UIScreen.main.bounds.height
+        let top = keyboardTop < h ? keyboardTop
+            : hardwareKeyboard ? h - 34                     // no on-screen keyboard: near the bottom
+            : (KeyboardMotion.lastTop ?? h - 336)
+        return max(0, top - 16 - (cardMinY + cardHeight))   // reads as the sheets' 10 pt gap
     }
     private static let pasteSpring = Animation.spring(response: 0.46, dampingFraction: 0.86)
     /// The link the editor sheet shows (kept while the sheet animates away).
@@ -33,7 +70,7 @@ struct LockScreenView: View {
 
     private func endPaste() {
         linkFocused = false
-        withAnimation(Self.pasteSpring) { pasteMode = false }
+        withAnimation(KeyboardMotion.last) { pasteMode = false }
     }
 
     var body: some View {
@@ -49,7 +86,9 @@ struct LockScreenView: View {
             .contentShape(Rectangle())
             .onTapGesture { linkFocused = false } // tap the wallpaper to put the keyboard away
             .gesture(
-                DragGesture(minimumDistance: 8)
+                // Screen coordinates: the lock moves up with the finger, so a local translation
+                // would shrink as it goes (a 270 pt swipe read as 100) and miss the threshold.
+                DragGesture(minimumDistance: 8, coordinateSpace: .global)
                     .updating($swiping) { _, s, _ in s = true }
                     .onChanged { drag = $0.translation.height }
                     .onEnded { value in
@@ -59,6 +98,7 @@ struct LockScreenView: View {
                             // Hand the finger's position to the reveal: the lock keeps moving up
                             // from where it is, on the same spring as the prototype growing in.
                             withAnimation(AppModel.revealSpring) { drag = 0 }
+                            linkFocused = false    // the keyboard leaves with the lock, not over the prototype
                             model.unlock()
                         } else {
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { drag = 0 }
@@ -72,16 +112,34 @@ struct LockScreenView: View {
                     LinkWidget(focused: $linkFocused, pasteMode: pasteMode) { endPaste() }
                         // Its resting position only: the frame includes the paste offset below, and
                         // reading it while offset would chase its own movement.
-                        .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .global).maxY }) { if !pasteMode { cardMaxY = $0 } }
+                        .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { r in
+                            if !pasteMode { cardMinY = r.minY }
+                            cardHeight = r.height
+                        }
                         // Comes down to sit just above the keyboard while pasting.
                         .offset(y: pasteMode ? pasteDrop : 0)
+                        // While the Link Directory opens: steps away up, blurring, like paste mode.
+                        .modifier(StepAway(amount: away, dy: -24))
                         .zIndex(1)
                     // Saved links hug their rows, then fill the space below and scroll inside
                     // the card once they no longer fit (measured, so it holds on every screen).
                     Group {
                         LinkDirectoryWidget(directory: model.directory)
+                            // Where the morph starts and ends; the real widget hides under it.
+                            .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { r in
+                                // The open page's own widget keeps measuring, so the card closes
+                                // onto its current size (links added or deleted meanwhile).
+                                if !morphShown || expanded == .directory { widgetFrame = r }
+                            }
+                            .opacity(morphShown && expanded == .directory ? 0 : 1)
+                            .modifier(StepAway(amount: expanded == .push ? away : 0, dy: -24))
                         // Links pushed from the web page.
-                        PushWidget(hub: model.push)
+                        PushWidget(hub: model.push, matchHeight: widgetFrame.height > 0 ? widgetFrame.height : nil)
+                            .onGeometryChange(for: CGRect.self, of: { $0.frame(in: .global) }) { r in
+                                if !morphShown || expanded == .push { pushFrame = r }
+                            }
+                            .opacity(morphShown && expanded == .push ? 0 : 1)
+                            .modifier(StepAway(amount: expanded == .directory ? away : 0, dy: 40))
                     }
                     .opacity(pasteMode ? 0 : 1)
                     .offset(y: pasteMode ? 40 : 0)
@@ -108,6 +166,7 @@ struct LockScreenView: View {
                     }
                     .buttonStyle(LWPress())
                     .accessibilityLabel("Quick tour of Vercel Sim")
+                    .modifier(StepAway(amount: away, dy: 40))
                     .opacity(pasteMode ? 0 : 1)
                     .allowsHitTesting(!pasteMode)
                 }
@@ -120,6 +179,98 @@ struct LockScreenView: View {
               // itself is a separate presentation, so it stays sharp), easing in with it.
               .offset(y: min(0, drag))
               .opacity(1 + Double(min(0, drag) / (height * 1.4)))
+              .allowsHitTesting(push < 0.01 && !morphShown)   // not while the card is still shrinking back
+        }
+        // Link Directory ▸ the widget morphs into its own page, driven by `push` (0 the widget,
+        // 1 the page); the back swipe drags it directly so the morph follows the finger.
+        .overlay {
+            GeometryReader { geo in
+                let m = LockMetrics(size: geo.size, safe: model.device.safeArea)
+                let w = geo.size.width
+                // Always mounted (hidden at rest), so the morph animates from the widget's
+                // frame instead of being inserted already full screen.
+                Group {
+                    // Both stay mounted (only the active one shows), so neither is ever inserted
+                    // mid-animation, which would render it straight at its end state.
+                    ZStack {
+                        LinkDirectoryMorph(directory: model.directory, progress: expanded == .directory ? push : 0,
+                                           from: widgetFrame, screen: geo.size,
+                                           top: m.clockTop, margin: m.margin) { closePage() }
+                            .opacity(expanded == .directory ? 1 : 0)
+                            .allowsHitTesting(expanded == .directory)
+                        PushMorph(hub: model.push, progress: expanded == .push ? push : 0, from: pushFrame, screen: geo.size,
+                                  top: m.clockTop, margin: m.margin,
+                                  matchHeight: widgetFrame.height > 0 ? widgetFrame.height : nil) { closePage() }
+                            .opacity(expanded == .push ? 1 : 0)
+                            .allowsHitTesting(expanded == .push)
+                    }
+                        .overlay(alignment: .leading) {
+                            // Interactive back from the left edge.
+                            Color.clear.frame(width: 24).contentShape(Rectangle())
+                                .gesture(
+                                    DragGesture(minimumDistance: 4, coordinateSpace: .global)
+                                        .updating($edgeDragging) { _, s, _ in s = true }
+                                        .onChanged { v in
+                                            push = min(1, max(0, 1 - v.translation.width / w))
+                                            away = min(1, max(0, (push - 0.35) / 0.4))
+                                        }
+                                        .onEnded { v in
+                                            if v.translation.width > w * 0.35 || v.predictedEndTranslation.width > w * 0.5 {
+                                                UISelectionFeedbackGenerator().selectionChanged()
+                                                closePage()
+                                            } else {
+                                                withAnimation(Self.pushSpring) { push = 1; away = 1 }
+                                            }
+                                        }
+                                )
+                                .allowsHitTesting(pageOpen && pageSettled)
+                        }
+                }
+                .opacity(morphShown ? 1 : 0)
+            }
+            .ignoresSafeArea()
+            .allowsHitTesting(pageOpen)
+            .accessibilityHidden(!pageOpen)
+        }
+        // One page at a time: if both were asked for at once (two fingers), the later one wins
+        // only when the other isn't already open.
+        .onChange(of: model.directoryOpen) { _, open in
+            guard open else { return }
+            if model.pushPageOpen { model.directoryOpen = false } else { expanded = .directory }
+        }
+        .onChange(of: model.pushPageOpen) { _, open in
+            guard open else { return }
+            if model.directoryOpen { model.pushPageOpen = false } else { expanded = .push }
+        }
+        .onChange(of: pageOpen) { _, open in
+            morphGen += 1
+            let gen = morphGen
+            pageSettled = false
+            if open {
+                // Show the card (instantly, over the widget), then grow it on the next frame.
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { morphShown = true }
+                withAnimation(.easeOut(duration: 0.16)) { away = 1 }
+                // A beat after the others start leaving, so the card never grows over them.
+                withAnimation(Self.pushSpring.delay(0.05)) { push = 1 } completion: {
+                    if gen == morphGen, pageOpen { pageSettled = true }
+                }
+            } else {
+                withAnimation(.easeOut(duration: 0.3).delay(0.22)) { away = 0 }
+                withAnimation(Self.pushSpring) { push = 0 } completion: {
+                    if gen == morphGen, !pageOpen {
+                        var t = Transaction(); t.disablesAnimations = true
+                        withTransaction(t) { morphShown = false }
+                    }
+                }
+            }
+        }
+        .onChange(of: edgeDragging) { _, dragging in
+            // An interrupted edge drag (no onEnded): settle to where the page belongs.
+            if !dragging, push > 0, push < 1 {
+                let open = pageOpen
+                withAnimation(Self.pushSpring) { push = open ? 1 : 0; away = open ? 1 : 0 }
+            }
         }
         // Editing a saved link: a heavy blur over the whole lock screen. The sheet is its own
         // presentation above this, so it stays sharp.
@@ -150,24 +301,41 @@ struct LockScreenView: View {
         // Pushed from web ▸ Set up: join a room.
         .lwFloatingSheet(isPresented: $model.pushJoinOpen, height: 520, scrim: 0.2, fit: true) { PushJoinSheet(hub: model.push) }
         .onChange(of: model.pushJoinOpen) { _, on in joinBlur = on }
+        // A lock screen mounted with a sheet already up starts with its blur on, too.
+        .onAppear {
+            editBlur = model.editingLink != nil
+            guideBlur = model.guideOpen
+            joinBlur = model.pushJoinOpen
+        }
         // Paste mode follows the field, and holds while a pasted link is opening.
         .onChange(of: linkFocused) { _, on in
-            if on { withAnimation(Self.pasteSpring) { pasteMode = true } }
-            else if !model.opening { withAnimation(Self.pasteSpring) { pasteMode = false } }
+            // On the keyboard's own curve, so the cards move with it, not before or after it.
+            if on { withAnimation(KeyboardMotion.last) { pasteMode = true } }
+            else if !model.opening, !model.linkSubmitting { withAnimation(KeyboardMotion.last) { pasteMode = false } }
+        }
+        .onChange(of: model.linkSubmitting) { _, on in
+            // A submit that didn't open anything (an invalid link): paste mode ends now.
+            if !on, !model.opening, !linkFocused { withAnimation(Self.pasteSpring) { pasteMode = false } }
         }
         .onChange(of: model.opening) { _, on in
             if !on, !linkFocused { withAnimation(Self.pasteSpring) { pasteMode = false } }
         }
         .onChange(of: model.lockVisible) { _, visible in
-            if !visible { pasteMode = false }
+            // Leaving: put the keyboard away (paste mode animates out with the field, or holds
+            // while a link opens). Back again: never come back stuck in paste mode.
+            if !visible { linkFocused = false; closePage() }
+            else if !linkFocused { pasteMode = false }
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { n in
             guard let end = (n.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? NSValue)?.cgRectValue else { return }
             let top = end.minY < UIScreen.main.bounds.height ? end.minY : UIScreen.main.bounds.height
-            withAnimation(Self.pasteSpring) { keyboardTop = top }
+            // Focused, yet nothing on screen: a hardware keyboard. (While hiding, the field is
+            // already unfocused, so a paste-mode hold keeps aiming where the keyboard was.)
+            if linkFocused { hardwareKeyboard = top >= UIScreen.main.bounds.height }
+            withAnimation(KeyboardMotion.animation(n)) { keyboardTop = top }
         }
-        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-            withAnimation(Self.pasteSpring) { keyboardTop = UIScreen.main.bounds.height }
+        .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { n in
+            withAnimation(KeyboardMotion.animation(n)) { keyboardTop = UIScreen.main.bounds.height }
         }
     }
 }
@@ -183,6 +351,8 @@ private struct LinkWidget: View {
     @State private var shake: CGFloat = 0
 
     private var canSubmit: Bool { !link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    /// A submit is waiting for the keyboard to go: a second tap meanwhile is ignored.
+    @State private var pending = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -221,7 +391,7 @@ private struct LinkWidget: View {
                         .accessibilityLabel("Clear")
                 }
                 LWIconButton(symbol: "arrow.right", look: .solid, size: 36, busy: model.opening, action: submit)
-                    .disabled(!canSubmit || model.opening)
+                    .disabled(!canSubmit || model.opening || pending)
                     .accessibilityLabel(model.opening ? "Opening prototype" : "Open prototype")
             }
             .padding(.leading, 14)
@@ -240,14 +410,20 @@ private struct LinkWidget: View {
     }
 
     private func submit() {
-        guard canSubmit, !model.opening else { return }
+        guard canSubmit, !model.opening, !pending else { return }
         guard AppModel.normalize(link) != nil else { rejected(); return }
         // Keyboard first, and open only once it has fully gone: a reveal that overlaps the
         // keyboard's dismissal can leave the lock screen drawn in place.
         let target = link
         let keyboardUp = focused.wrappedValue
+        pending = true
+        model.linkSubmitting = true
         focused.wrappedValue = false
-        KeyboardWait.afterHidden(keyboardUp) { if !model.open(target) { rejected() } }
+        KeyboardWait.afterHidden(keyboardUp) {
+            pending = false
+            if !model.open(target) { rejected() }
+            model.linkSubmitting = false
+        }
     }
 
     private func rejected() {
@@ -268,6 +444,7 @@ enum KeyboardWait {
             guard !done else { return }
             done = true
             if let token { NotificationCenter.default.removeObserver(token) }
+            token = nil          // breaks the block → fire → token cycle
             work()
         }
         token = NotificationCenter.default.addObserver(forName: UIResponder.keyboardDidHideNotification, object: nil, queue: .main) { _ in fire() }
@@ -411,5 +588,27 @@ struct BackdropBlur: UIViewRepresentable {
         let target: UIVisualEffect? = active ? UIBlurEffect(style: .systemThinMaterial) : nil   // follows light / dark
         guard (v.effect == nil) != (target == nil) else { return }
         UIViewPropertyAnimator(duration: active ? 0.45 : 0.32, dampingRatio: 1) { v.effect = target }.startAnimation()
+    }
+}
+
+/// The other widgets stepping away while one takes the screen: they drift (by `dy`), blur
+/// and fade, the same as in paste mode.
+/// Driven by its own quick timing (`away` in LockScreenView): the widgets clear out before the
+/// growing card reaches them, and come back only once it has shrunk.
+private struct StepAway: ViewModifier, Animatable {
+    var amount: CGFloat
+    var dy: CGFloat
+    var animatableData: CGFloat {
+        get { amount }
+        set { amount = newValue }
+    }
+    func body(content: Content) -> some View {
+        let raw = min(max(amount, 0), 1)
+        let t = raw * raw * (3 - 2 * raw)
+        return content
+            .offset(y: dy * t)
+            .blur(radius: 8 * t)
+            .scaleEffect(1 - 0.04 * t)
+            .opacity(1 - Double(t))
     }
 }
